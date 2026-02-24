@@ -1,0 +1,1 @@
+Single frames extracted from raw videos.
