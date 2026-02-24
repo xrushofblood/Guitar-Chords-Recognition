@@ -1,0 +1,35 @@
+# 1. Dataset & Media Files
+# Ignore heavy video files (supported formats as per the reference paper)
+*.mp4
+*.avi
+*.wmv
+*.mov
+*.mkv
+
+# Ignore processed frames to prevent repository bloat
+data/processed_frames/*.jpg
+data/processed_frames/*.png
+
+# Explicitly track JSON annotation files
+!data/annotations/*.json
+
+# Keep empty directories tracked (if you add a .gitkeep file inside them)
+!.gitkeep
+
+# 2. Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# 3. Jupyter Notebooks
+.ipynb_checkpoints/
+
+# 4. OS & IDE Generated Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
