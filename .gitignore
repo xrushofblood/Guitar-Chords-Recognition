@@ -33,3 +33,6 @@ env/
 Thumbs.db
 .vscode/
 .idea/
+
+# 5. Backups
+backups/
