@@ -27,7 +27,7 @@ def process_and_save_frame(video_path, target_time_sec, output_path):
     # 1. Grayscale conversion
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
-    # 2. Global Histogram Equalization (Chosen over CLAHE for cleaner Canny edges)
+    # 2. Global Histogram Equalization
     equalized = cv2.equalizeHist(gray)
     
     # 3. Gaussian Blur (To reduce high-frequency noise before Edge Detection)
