@@ -5,8 +5,8 @@ import glob
 
 def process_and_save_frame(video_path, target_time_sec, output_path):
     """
-    Extracts a frame at a specific timestamp, applies grayscale conversion,
-    global histogram equalization, and Gaussian blur, then saves the result.
+    Extracts a raw frame at a specific timestamp and saves it directly.
+    No visual preprocessing is applied here to preserve data for MediaPipe.
     """
     cap = cv2.VideoCapture(video_path)
     
@@ -23,18 +23,8 @@ def process_and_save_frame(video_path, target_time_sec, output_path):
         print(f"Error: Frame extraction failed at {target_time_sec}s for {video_path}")
         return False
 
-    # --- PRE-PROCESSING PIPELINE (Validated in 01_data_exploration.ipynb) ---
-    # 1. Grayscale conversion
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
-    # 2. Global Histogram Equalization
-    equalized = cv2.equalizeHist(gray)
-    
-    # 3. Gaussian Blur (To reduce high-frequency noise before Edge Detection)
-    blurred = cv2.GaussianBlur(equalized, (5, 5), 0)
-    
-    # Save the processed image
-    cv2.imwrite(output_path, blurred)
+    # Save the raw, original color image
+    cv2.imwrite(output_path, frame)
     return True
 
 def main():
