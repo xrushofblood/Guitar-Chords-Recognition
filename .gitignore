@@ -10,6 +10,12 @@
 data/processed_frames/*.jpg
 data/processed_frames/*.png
 
+#Ignore extracted features debugs and visualizations to prevent repository bloat
+data/extracted_features/debug_steps/*.jpg
+data/extracted_features/debug_steps/*.png
+data/extracted_features/visualizations/*.jpg
+data/extracted_features/visualizations/*.png
+
 # Explicitly track JSON annotation files
 !data/annotations/*.json
 

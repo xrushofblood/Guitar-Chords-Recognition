@@ -75,3 +75,58 @@ We have successfully completed the horizontal feature extraction. The foundation
 ## 5. Next Steps
 - Refine the **Global Consensus Filter** for Step 6 to ensure that any line not fitting the $1.059$ ratio is discarded before inference.
 - Finalize the **6x6 Fretboard Matrix** intersection points for fingertip mapping.
+
+# Day 2 - Feature Extraction (Part 2: Fret Spacing & Hand Localization)
+
+## Objective
+Refine the detection of the frets using guitar physics (logarithmic spacing) and successfully isolate the fretting hand from the fretboard without relying on AI pose estimation models (e.g., MediaPipe), which failed due to occlusions.
+
+## Trials & Errors Log
+Today's session involved significant troubleshooting to distinguish the guitarist's hand from the wooden fretboard and correctly map the frets.
+
+1. **Attempt 1: Linear Elimination for Frets**
+   - *Approach:* Used a linear threshold to eliminate noise between frets.
+   - *Error:* Unstable. It either deleted real frets or kept finger fragments, failing to respect the natural narrowing of frets towards the bridge.
+2. **Attempt 2: Pure Logarithmic Grid (Asmar's Constant)**
+   - *Approach:* Applied the physical guitar constant ($r = 0.94387$) to project the fret positions mathematically. 
+   - *Error:* The algorithm consistently anchored to the index finger, mistaking it for the 1st fret, which threw off the entire grid calculation.
+3. **Attempt 3: HSV + YCbCr Skin Masking**
+   - *Approach:* Attempted to isolate the hand using advanced color spaces to avoid the "finger as a fret" issue.
+   - *Error:* The maple/light wood of the fretboard had similar hue and saturation to human skin. The mask "exploded", identifying the entire neck as a giant hand.
+4. **Attempt 4: Grid Erasure (Compartmentalization)**
+   - *Approach:* Drew thick black lines over the detected strings and frets to chop the wood into isolated cells, filtering out small blobs.
+   - *Error:* Too fragile. If the grid was slightly misaligned, large chunks of wood survived the cut and merged with the hand bounding box.
+
+## Final Solutions & Breakthroughs
+
+### 1. Heavy Morphology on RGB Mask (The Dominant Blob)
+We reverted to Asmar's strict RGB thresholds but applied a massive **Morphological Opening (15x15 elliptical kernel)**. 
+- *Why it works:* The algorithm is "blind" to hands but understands geometry. The 15x15 kernel acts as a thick brush that completely destroys thin horizontal/vertical lines (the wood grain and fret fragments) while preserving massive, solid pixel clusters (the hand). By selecting only the largest surviving contour (`contours[0]`), we successfully extracted the pure hand blob.
+
+### 2. Domain Knowledge Optimization: The 6x4 Matrix
+Instead of computing the entire fretboard (6 strings x 6 frets), we optimized the matrix based on the specific use case: detecting open chords.
+- *Implementation:* Sliced the inferred frets array to `inferred_frets_x[-4:]`.
+- *Result:* A highly optimized **6x4 Bounded Matrix** (6 strings, 1 Nut + 3 Frets). This eliminates all noise and computation for the higher frets, drastically improving stability for chords like C, G, D, Am, E, etc.
+
+# Project Update: Day 2 - Feature Extraction & Pipeline Consolidation
+
+## 🚀 Accomplishments
+* **Unified Extraction Pipeline**: Successfully implemented a 9-step processing chain that transforms raw video frames into a 18-feature density vector.
+* **Perspective-Aware Strings**: Refined Step 3C to use mathematical regression, ensuring string detection remains stable even with moderate neck tilts.
+* **Hand & Fretboard Mapping**: Integrated skin masking and hand-tracking (Step 8) to contextualize hand position relative to the fretboard grid.
+* **Feature Vector Generation**: Standardized the output into a CSV format (`chord_features.csv`), where each row represents a frame with 18 normalized density values.
+* **Comprehensive Data Ingestion**: Updated the ingestion script to include 'N' (Null/Transition) labels, which is critical for training the model to recognize non-playing states.
+
+## 🛠 Technical Notes
+* **Standard Resolution**: Operations are optimized for 4K frames.
+* **Feature Set**: The 18-cell grid (6 strings x 3 frets) provides a spatial "signature" of the chord being played.
+* **Robustness**: Current logic works optimally on high-contrast setups (e.g., the blue guitar).
+
+## 📋 Next Steps
+1. **Perspective Robustness**: Explore dynamic warping or adaptive "anchor" points to handle steep 3D tilts (wood guitar scenario).
+2. **Dataset Expansion**: Create additional JSON annotations for a wider variety of chords (G, Am, E, etc.) to test signature uniqueness.
+3. **Dynamic Fret Inference**: Transition from fixed "knobs" in Step 6 to a fully dynamic detection system that reads fret spacing directly from image data.
+4. **Machine Learning Preparation**: 
+    * Implement data cleaning for the CSV.
+    * Perform Train/Test/Validation splits.
+    * Train initial classifiers (Random Forest or SVM) to benchmark accuracy.

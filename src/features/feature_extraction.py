@@ -1,351 +1,382 @@
 import os
 import cv2
-import json
 import numpy as np
-import mediapipe as mp
+import math
+import csv
 
-# --- CONFIGURATION PATHS ---
+# =========================================================
+# CONFIGURATION
+# =========================================================
 INPUT_DIR = "data/processed_frames"
-OUTPUT_DATA_DIR = "data/extracted_features"
-OUTPUT_VIZ_DIR = "data/extracted_features/visualizations"
-DEBUG_DIR = "data/extracted_features/debug_steps"
+BASE_OUTPUT_DIR = "data/extracted_features"
+DEBUG_DIR = os.path.join(BASE_OUTPUT_DIR, "debug_steps")
+VIZ_DIR = os.path.join(BASE_OUTPUT_DIR, "visualizations")
+CSV_PATH = os.path.join(BASE_OUTPUT_DIR, "chord_features.csv")
 
-os.makedirs(OUTPUT_DATA_DIR, exist_ok=True)
-os.makedirs(OUTPUT_VIZ_DIR, exist_ok=True)
-os.makedirs(DEBUG_DIR, exist_ok=True)
+# Create required directories
+for directory in [DEBUG_DIR, VIZ_DIR]:
+    if not os.path.exists(directory):
+        os.makedirs(directory)
 
-# --- MEDIAPIPE INITIALIZATION ---
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(
-    static_image_mode=True, 
-    max_num_hands=2, 
-    min_detection_confidence=0.1, 
-    model_complexity=1
-)
+# --- PHYSICAL LIMITS & RATIOS FOR 4K ---
+NECK_EDGE_RATIO = 0.88   
 
-# --- NOTEBOOK STEP 7 REVISED: STRING CLUSTERING WITH LINEAR REGRESSION ---
-def cluster_strings_with_tilt(segments, threshold=12):
-    if not segments:
-        return []
+files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
+print(f"Found {len(files)} frames. Running Full Pipeline (Steps 2 through 9)...")
+
+# Open CSV file to save the 18-feature vectors
+with open(CSV_PATH, mode='w', newline='') as csv_file:
+    csv_writer = csv.writer(csv_file)
     
-    # 1. Calculate midpoint Y for initial clustering
-    y_midpoints = [(seg[1] + seg[3]) / 2 for seg in segments]
-    combined = sorted(zip(y_midpoints, segments), key=lambda x: x[0])
-    
-    clusters = []
-    if combined:
-        current_cluster = [combined[0][1]]
-        for i in range(1, len(combined)):
-            if abs(combined[i][0] - combined[i-1][0]) <= threshold:
-                current_cluster.append(combined[i][1])
-            else:
-                clusters.append(current_cluster)
-                current_cluster = [combined[i][1]]
-        clusters.append(current_cluster)
-        
-    merged_lines = []
-    for cluster in clusters:
-        # Collect all points (x1, y1) and (x2, y2) from all segments in the cluster
-        all_x = []
-        all_y = []
-        for seg in cluster:
-            all_x.extend([seg[0], seg[2]])
-            all_y.extend([seg[1], seg[3]])
-        
-        # 2. LINEAR REGRESSION: Find the best fit line (y = mx + q)
-        slope, intercept = np.polyfit(all_x, all_y, 1)
-        
-        # Determine the full length based on the cluster's span
-        x_min = min(all_x)
-        x_max = max(all_x)
-        
-        # 3. Calculate start and end Y based on the REAL slope
-        y_start = int(slope * x_min + intercept)
-        y_end = int(slope * x_max + intercept)
-        
-        merged_lines.append([x_min, y_start, x_max, y_end])
-    
-    return merged_lines
+    # Create header: filename, label, cell_0, cell_1, ..., cell_17
+    header = ['filename', 'label'] + [f'cell_{i}' for i in range(18)]
+    csv_writer.writerow(header)
 
-# --- NOTEBOOK STEP 10: INTERSECTION ---
-def get_intersection(line1, line2):
-    x1, y1, x2, y2 = line1
-    x3, y3, x4, y4 = line2
-    denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
-    if denom == 0: return None
-    px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom
-    py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom
-    return (int(px), int(py))
-
-def save_debug_image(filename, step_name, image):
-    path = os.path.join(DEBUG_DIR, f"{filename.split('.')[0]}_{step_name}.jpg")
-    cv2.imwrite(path, image)
-
-
-def process_frame(image_path, filename):
-    print(f"\n{'='*40}\n--- PROCESSING FRAME: {filename} ---\n{'='*40}")
-    
-    original_frame = cv2.imread(image_path)
-    if original_frame is None: return
-        
-    height, width, _ = original_frame.shape
-    frame_rgb = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
-    
-    frame_features = {
-        "filename": filename, "hand_landmarks": [], "hand_zone": None, "fretboard_matrix": [] 
-    }
-
-    # ==========================================
-    # STEP 1: HAND TRACKING
-    # ==========================================
-    crop_offset_x = int(width * 0.15)
-    soft_crop_img = frame_rgb[:, crop_offset_x:].copy()
-    results = hands.process(soft_crop_img)
-    
-    hand_zone = None
-    x_coords, y_coords = [], []
-    hand_landmarks_to_draw = None
-    
-    if results.multi_hand_landmarks:
-        max_area = 0
-        cropped_width = width - crop_offset_x
-        for hl in results.multi_hand_landmarks:
-            xc = [int(l.x * cropped_width) + crop_offset_x for l in hl.landmark]
-            yc = [int(l.y * height) for l in hl.landmark]
-            area = (max(xc) - min(xc)) * (max(yc) - min(yc))
-            if area > max_area:
-                max_area = area
-                best_hand = hl
-                x_coords, y_coords = xc, yc
-                
-        for i, l in enumerate(best_hand.landmark):
-            frame_features["hand_landmarks"].append({"x": x_coords[i], "y": y_coords[i]})
+    for filename in files:
+        img_path = os.path.join(INPUT_DIR, filename)
+        original_frame = cv2.imread(img_path)
+        if original_frame is None: continue
             
-        pad_x, pad_y = int(width * 0.02), int(height * 0.02)
-        hand_zone = (max(0, min(x_coords)-pad_x), max(0, min(y_coords)-pad_y), 
-                     min(width, max(x_coords)+pad_x), min(height, max(y_coords)+pad_y))
-        frame_features["hand_zone"] = hand_zone
-        hand_landmarks_to_draw = best_hand
+        height, width = original_frame.shape[:2]
+        crop_offset_x = int(width * 0.15) 
 
-    # ==========================================
-    # STEP 2 & 3: STRINGS EXTRACTION
-    # ==========================================
-    gray = cv2.cvtColor(original_frame, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    sobel_y = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=3)
-    _, thresh_strings = cv2.threshold(cv2.convertScaleAbs(sobel_y), 40, 255, cv2.THRESH_BINARY)
-    preprocessed_strings = cv2.dilate(thresh_strings, np.ones((3, 3), np.uint8), iterations=1)
-    
-    roi_strings = preprocessed_strings.copy()
-    cv2.rectangle(roi_strings, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
-    
-    if hand_zone:
-        cv2.rectangle(roi_strings, (max(0, min(x_coords) - 5), max(0, min(y_coords) - 180)), 
-                      (min(width, max(x_coords) + 5), min(height, max(y_coords) + 15)), (0, 0, 0), -1)
+        MIN_SINGLE_GAP = height * 0.015  
+        MAX_SINGLE_GAP = height * 0.085  
 
-    lines_horizontal = cv2.HoughLinesP(roi_strings, rho=1, theta=np.pi/180, threshold=35, minLineLength=40, maxLineGap=150)
-    raw_strings_data = []
-    if lines_horizontal is not None:
-        for line in lines_horizontal:
-            angle = np.abs(np.degrees(np.arctan2(line[0][3] - line[0][1], line[0][2] - line[0][0] + 1e-6)))
-            if angle < 8 or angle > 172: raw_strings_data.append(line[0])
+        # Assume label is the first part of the filename (e.g., "C_01.jpg" -> "C")
+        label = filename.split('_')[0]
 
-    merged_strings = cluster_strings_with_tilt(raw_strings_data, threshold=12)
-
-    center_x = width // 2
-    long_lines_data = []
-    for line in merged_strings:
-        x1, y1, x2, y2 = line
-        if x1 == x2: continue
+        # =========================================================
+        # STEP 2 & 3: STRINGS EXTRACTION (WITH CLAHE)
+        # =========================================================
+        gray = cv2.cvtColor(original_frame, cv2.COLOR_BGR2GRAY)
         
-        length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
-        if length > width * 0.35: 
-            m = (y2 - y1) / (x2 - x1)
-            q = y1 - m * x1
-            y_c = m * center_x + q
-            long_lines_data.append({'m': m, 'q': q, 'y_c': y_c})
-
-    long_lines_data.sort(key=lambda x: x['y_c'])
-
-    debug_candidates = original_frame.copy()
-    for i, l in enumerate(long_lines_data):
-        y_start = int(l['q'])
-        y_end = int(l['m'] * width + l['q'])
-        cv2.line(debug_candidates, (0, y_start), (width, y_end), (255, 165, 0), 2)
-        cv2.putText(debug_candidates, f"idx:{i}", (width - 100, y_end - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-    save_debug_image(filename, "Step3b_LongLinesCandidates", debug_candidates)
-
-
-    # --- THE EXACT PERSPECTIVE ENGINE FROM USER'S NOTEBOOK ---
-    final_6_strings = []
-    if len(long_lines_data) >= 3:
-        str1 = long_lines_data[1]
-        str2 = long_lines_data[2]
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        gray_enhanced = clahe.apply(gray)
         
-        m1, q1 = str1['m'], str1['q']
-        m2, q2 = str2['m'], str2['q']
+        blurred = cv2.GaussianBlur(gray_enhanced, (5, 5), 0)
+
+        sobel_y = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=3)
+        _, thresh_strings = cv2.threshold(cv2.convertScaleAbs(sobel_y), 40, 255, cv2.THRESH_BINARY)
+
+        kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 10))
+        preprocessed_strings = cv2.morphologyEx(thresh_strings, cv2.MORPH_CLOSE, kernel_h, iterations=2)
+
+        roi_strings = preprocessed_strings.copy()
+        cv2.rectangle(roi_strings, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
         
-        if abs(m1 - m2) > 1e-6:
-            v_x = (q2 - q1) / (m1 - m2)
-            v_y = m1 * v_x + q1
-        else:
-            v_x = -1000000 
-            v_y = str1['y_c']
-            
-        y1_right = m1 * width + q1
-        y2_right = m2 * width + q2
-        gap_right = y2_right - y1_right
-        
-        for i in range(6):
-            target_y_right = y1_right + (i * gap_right)
-            m_new = (target_y_right - v_y) / (width - v_x)
-            q_new = target_y_right - (m_new * width)
-            
-            y_start = int(q_new)
-            y_end = int(target_y_right)
-            final_6_strings.append([0, y_start, width, y_end])
-
-        debug_reconstruction = original_frame.copy()
-        for s in final_6_strings:
-            cv2.line(debug_reconstruction, (s[0], s[1]), (s[2], s[3]), (255, 0, 255), 3)
-        save_debug_image(filename, "Step3c_StringsReconstruction", debug_reconstruction)
-    else:
-        print("ERROR: Not enough long lines found to calculate perspective.")
-
-    # ==========================================
-    # STEP 4: FRETS EXTRACTION
-    # ==========================================
-    sobel_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
-    _, preprocessed_frets = cv2.threshold(cv2.convertScaleAbs(sobel_x), 50, 255, cv2.THRESH_BINARY)
-    
-    roi_frets = preprocessed_frets.copy()
-    n_top, n_bot = int(height * 0.25), int(height * 0.75)
-    cv2.rectangle(roi_frets, (0, 0), (width, n_top), (0, 0, 0), -1)
-    cv2.rectangle(roi_frets, (0, n_bot), (width, height), (0, 0, 0), -1)
-    cv2.rectangle(roi_frets, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
-    
-    if hand_zone:
-        cv2.rectangle(roi_frets, (max(0, min(x_coords) - 5), max(0, min(y_coords) - 80)), 
-                      (min(width, max(x_coords) + 5), min(height, max(y_coords) + 20)), (0, 0, 0), -1)
-
-    lines_vertical = cv2.HoughLinesP(roi_frets, rho=1, theta=np.pi/180, threshold=25, minLineLength=15, maxLineGap=10)
-    raw_frets_data = []
-    if lines_vertical is not None:
-        for line in lines_vertical:
-            x1, y1, x2, y2 = line[0]
-            if 82 < np.abs(np.degrees(np.arctan2(y2 - y1, x2 - x1 + 1e-6))) < 98:
-                is_near = (hand_zone[0] - 20 < x1 < hand_zone[2] + 20) if hand_zone else False
-                if np.abs(y2 - y1) > ((n_bot - n_top) * 0.3 if not is_near else 10):
-                    raw_frets_data.append(line[0])
-
-    fret_segments = [{'x_c': (x1+x2)/2, 'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2} for x1, y1, x2, y2 in raw_frets_data]
-    fret_segments.sort(key=lambda item: item['x_c'])
-    
-    clusters = []
-    if fret_segments:
-        current_cluster = [fret_segments[0]]
-        for i in range(1, len(fret_segments)):
-            if fret_segments[i]['x_c'] - fret_segments[i-1]['x_c'] < 15:
-                current_cluster.append(fret_segments[i])
-            else:
-                clusters.append(current_cluster)
-                current_cluster = [fret_segments[i]]
-        clusters.append(current_cluster)
-
-    clean_frets = []
-    for cluster in clusters:
-        y_pts, x_pts = [], []
-        for seg in cluster:
-            y_pts.extend([seg['y1'], seg['y2']])
-            x_pts.extend([seg['x1'], seg['x2']])
-        if len(y_pts) > 1:
-            coeffs = np.polyfit(y_pts, x_pts, 1)
-            clean_frets.append({'m_inv': coeffs[0], 'q_inv': coeffs[1], 'x_c': coeffs[0] * (height / 2) + coeffs[1]})
-
-    clean_frets.sort(key=lambda item: item['x_c'])
-
-    # FRET DEDUPLICATION
-    if len(clean_frets) > 1:
-        filtered = [clean_frets[0]]
-        for f in clean_frets[1:]:
-            if f['x_c'] - filtered[-1]['x_c'] > width * 0.03: 
-                filtered.append(f)
-        clean_frets = filtered
-
-    # NUT CALCULATION
-    if len(clean_frets) >= 2:
-        gap_1_2 = clean_frets[-1]['x_c'] - clean_frets[-2]['x_c']
-        perspective_multiplier = 1.35 
-        nut_gap = gap_1_2 * perspective_multiplier
-        nut_x = clean_frets[-1]['x_c'] + nut_gap
-        
-        clean_frets.append({
-            'm_inv': clean_frets[-1]['m_inv'],
-            'q_inv': nut_x - (clean_frets[-1]['m_inv'] * (height / 2)),
-            'x_c': nut_x,
-            'is_nut': True 
-        })
-
-    final_frets_lines = []
-    if len(final_6_strings) == 6:
-        str1 = final_6_strings[0]
-        str6 = final_6_strings[5]
-        
-        m_s1, q_s1 = (str1[3] - str1[1]) / width, str1[1]
-        m_s6, q_s6 = (str6[3] - str6[1]) / width, str6[1]
-
-        for f in clean_frets:
-            m_f, q_f = f['m_inv'], f['q_inv']
-            den_top = 1 - (m_f * m_s1)
-            x_top = (m_f * q_s1 + q_f) / den_top if abs(den_top) > 1e-6 else f['x_c']
-            y_top = m_s1 * x_top + q_s1 if abs(den_top) > 1e-6 else q_s1
-                
-            den_bot = 1 - (m_f * m_s6)
-            x_bot = (m_f * q_s6 + q_f) / den_bot if abs(den_bot) > 1e-6 else f['x_c']
-            y_bot = m_s6 * x_bot + q_s6 if abs(den_bot) > 1e-6 else q_s6
-                
-            final_frets_lines.append([int(x_top), int(y_top), int(x_bot), int(y_bot)])
-
-    # ==========================================
-    # STEP 5: FINAL DRAWING
-    # ==========================================
-    viz_img = original_frame.copy()
-    
-    if len(final_6_strings) == 6:
-        for fret_idx, fret_line in enumerate(final_frets_lines):
-            current_fret_nodes = []
-            for string_idx, string_line in enumerate(final_6_strings):
-                node_coords = get_intersection(fret_line, string_line)
-                if node_coords:
-                    current_fret_nodes.append(node_coords)
-                    is_nut = (fret_idx == len(final_frets_lines) - 1)
-                    cv2.circle(viz_img, node_coords, 5, (0, 255, 255) if is_nut else (0, 0, 255), -1)
-            frame_features["fretboard_matrix"].append(current_fret_nodes)
-
-    for s in final_6_strings: 
-        cv2.line(viz_img, (int(s[0]), int(s[1])), (int(s[2]), int(s[3])), (255, 0, 255), 2)
-    
-    for f in final_frets_lines: 
-        cv2.line(viz_img, (int(f[0]), int(f[1])), (int(f[2]), int(f[3])), (255, 255, 0), 2)
-
-    if results.multi_hand_landmarks and hand_landmarks_to_draw:
-        mp.solutions.drawing_utils.draw_landmarks(
-            viz_img[:, crop_offset_x:], hand_landmarks_to_draw, mp_hands.HAND_CONNECTIONS,
-            mp.solutions.drawing_utils.DrawingSpec(color=(0,255,0), thickness=2, circle_radius=2),
-            mp.solutions.drawing_utils.DrawingSpec(color=(255,255,255), thickness=2)
+        lines_h = cv2.HoughLinesP(
+            roi_strings, 1, np.pi/180, threshold=50,
+            minLineLength=int(width * 0.25), maxLineGap=int(width * 0.05)
         )
 
-    json_path = os.path.join(OUTPUT_DATA_DIR, filename.replace('.jpg', '.json').replace('.png', '.json'))
-    with open(json_path, 'w') as jf: json.dump(frame_features, jf, indent=4)
-    cv2.imwrite(os.path.join(OUTPUT_VIZ_DIR, filename), viz_img)
-    
-    print(f"[{filename}] Master Matrix saved.")
+        clean_strings_segments = []
+        if lines_h is not None:
+            for line in lines_h:
+                x1, y1, x2, y2 = line[0]
+                angle_deg = abs(math.degrees(math.atan2(y2 - y1, x2 - x1))) % 180
+                deviation = min(angle_deg, abs(180 - angle_deg))
+                if deviation <= 10.0: 
+                    clean_strings_segments.append(line)
 
-if __name__ == "__main__":
-    if not os.path.exists(INPUT_DIR):
-        print(f"Directory {INPUT_DIR} not found.")
-    else:
-        for file in os.listdir(INPUT_DIR):
-            if file.lower().endswith(('.jpg', '.jpeg', '.png')):
-                process_frame(os.path.join(INPUT_DIR, file), file)
+        if not clean_strings_segments: continue
+
+        # =========================================================
+        # STEP 3C: PERSPECTIVE STRING INFERENCE
+        # =========================================================
+        segments_with_yc = []
+        for line in clean_strings_segments:
+            x1, y1, x2, y2 = line[0]
+            if x1 == x2: x2 += 1 
+            m = (y2 - y1) / (x2 - x1)
+            q = y1 - m * x1
+            yc = m * (width / 2) + q
+            segments_with_yc.append((yc, x1, y1, x2, y2))
+
+        segments_with_yc.sort(key=lambda x: x[0])
+
+        groups = []
+        y_tol = height * 0.02 
+        if segments_with_yc:
+            curr_group = [segments_with_yc[0]]
+            for seg in segments_with_yc[1:]:
+                if seg[0] - np.mean([s[0] for s in curr_group]) <= y_tol:
+                    curr_group.append(seg)
+                else:
+                    groups.append(curr_group)
+                    curr_group = [seg]
+            groups.append(curr_group)
+
+        detected_strings = []
+        for g in groups:
+            X, Y = [], []
+            for seg in g:
+                X.extend([seg[1], seg[3]])
+                Y.extend([seg[2], seg[4]])
+            m, q = np.polyfit(X, Y, 1)
+            yc = m * (width / 2) + q
+            detected_strings.append({'yc': yc, 'm': m, 'q': q})
+
+        detected_strings.sort(key=lambda x: x['yc'])
+
+        # --- THE NECK KILLER ---
+        if len(detected_strings) >= 3:
+            gaps = np.diff([s['yc'] for s in detected_strings])
+            single_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
+            base_gap = np.median(single_gaps) if single_gaps else (np.min(gaps)/2 if len(gaps)>0 else 100)
+
+            if gaps[0] < base_gap * NECK_EDGE_RATIO:
+                detected_strings.pop(0) 
+
+        # 3. ASSIGN LOGICAL INDICES
+        final_strings_equations = [] 
+        
+        if len(detected_strings) >= 1:
+            indices = [0]
+            if len(detected_strings) > 1:
+                gaps = np.diff([s['yc'] for s in detected_strings])
+                single_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
+                base_gap = np.median(single_gaps) if single_gaps else (np.min(gaps)/2 if len(gaps)>0 else 100)
+                
+                for i in range(1, len(detected_strings)):
+                    gap = detected_strings[i]['yc'] - detected_strings[i-1]['yc']
+                    steps = max(1, round(gap / base_gap))
+                    indices.append(indices[-1] + steps)
+
+            top_y = detected_strings[0]['yc']
+            bottom_y = detected_strings[-1]['yc']
+            
+            if top_y > height - bottom_y:
+                shift = 5 - indices[-1]
+            else:
+                shift = 0 - indices[0]
+                
+            indices = [i + shift for i in indices]
+            valid_data = [(idx, s) for idx, s in zip(indices, detected_strings) if 0 <= idx <= 5]
+
+            # 4. SECOND REGRESSION: Perspective Model
+            if len(valid_data) >= 2:
+                idx_list = [v[0] for v in valid_data]
+                m_list = [v[1]['m'] for v in valid_data]
+                q_list = [v[1]['q'] for v in valid_data]
+                
+                m_model = np.polyfit(idx_list, m_list, 1)
+                q_model = np.polyfit(idx_list, q_list, 1)
+            else:
+                m_model = [0, valid_data[0][1]['m'] if valid_data else 0]
+                q_model = [0, valid_data[0][1]['q'] if valid_data else 0]
+
+            # 5. GENERATE THE 6 MASTER STRINGS
+            for i in range(6):
+                m_i = np.polyval(m_model, i)
+                q_i = np.polyval(q_model, i)
+                final_strings_equations.append((m_i, q_i)) 
+
+        if len(final_strings_equations) < 6:
+            continue
+
+        # =========================================================
+        # STEP 4: RAW FRET EXTRACTION (Sobel & Hough)
+        # =========================================================
+        sobel_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
+        abs_sobel = cv2.convertScaleAbs(sobel_x)
+        _, thresh_frets = cv2.threshold(abs_sobel, 40, 255, cv2.THRESH_BINARY)
+
+        kernel_v = np.ones((7, 1), np.uint8)
+        opened_frets = cv2.morphologyEx(thresh_frets, cv2.MORPH_OPEN, kernel_v)
+        preprocessed_frets = cv2.dilate(opened_frets, kernel_v, iterations=1)
+
+        m_top, q_top = final_strings_equations[0]
+        m_bot, q_bot = final_strings_equations[5]
+        margin = 15 
+
+        p1 = [0, int(m_top * 0 + q_top) - margin]
+        p2 = [width, int(m_top * width + q_top) - margin]
+        p3 = [width, int(m_bot * width + q_bot) + margin]
+        p4 = [0, int(m_bot * 0 + q_bot) + margin]
+
+        pts = np.array([p1, p2, p3, p4], np.int32)
+        string_fence_mask = np.zeros_like(preprocessed_frets)
+        cv2.fillPoly(string_fence_mask, [pts], 255)
+
+        roi_frets = cv2.bitwise_and(preprocessed_frets, string_fence_mask)
+        cv2.rectangle(roi_frets, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
+
+        min_length_fret = int(height * 0.10) 
+        max_gap_fret = int(height * 0.05)
+
+        lines_v = cv2.HoughLinesP(
+            roi_frets, 1, np.pi/180, threshold=40,
+            minLineLength=min_length_fret, maxLineGap=max_gap_fret
+        )
+
+        angle_filtered_frets = []
+        
+        if lines_v is not None:
+            for line in lines_v:
+                x1, y1, x2, y2 = line[0]
+                angle_deg = abs(math.degrees(math.atan2(y2 - y1, x2 - x1))) % 180
+                deviation = abs(angle_deg - 90)
+                
+                if deviation <= 10.0:
+                    angle_filtered_frets.append(line)
+
+        # =========================================================
+        # STEP 5: FRET UNIFICATION (The Buddy System)
+        # =========================================================
+        clean_unified_frets = []
+        buddy_tolerance = int(width * 0.015) 
+        used_lines = set()
+
+        for i, lineA in enumerate(angle_filtered_frets):
+            if i in used_lines: continue
+            
+            xA_center = (lineA[0][0] + lineA[0][2]) / 2.0
+            buddies = [lineA]
+            used_lines.add(i)
+            
+            for j, lineB in enumerate(angle_filtered_frets):
+                if j in used_lines: continue
+                xB_center = (lineB[0][0] + lineB[0][2]) / 2.0
+                
+                if abs(xA_center - xB_center) <= buddy_tolerance:
+                    buddies.append(lineB)
+                    used_lines.add(j)
+                    
+            avg_x = int(np.mean([(b[0][0] + b[0][2])/2.0 for b in buddies]))
+            min_y = min([min(b[0][1], b[0][3]) for b in buddies])
+            max_y = max([max(b[0][1], b[0][3]) for b in buddies])
+            
+            total_span = max_y - min_y
+            if total_span >= min_length_fret:
+                clean_unified_frets.append({'x': avg_x, 'y1': min_y, 'y2': max_y})
+
+        # =========================================================
+        # STEP 6: MANUAL GRID PROJECTOR (NUT + 4 FRETS)
+        # =========================================================
+        initial_gap = width * 0.12
+        shrink_ratio = 0.80
+
+        raw_frets_x = sorted([f['x'] for f in clean_unified_frets if (f['y2'] - f['y1']) > height * 0.15])
+        unified_x = []
+
+        if raw_frets_x:
+            curr = [raw_frets_x[0]]
+            for x in raw_frets_x[1:]:
+                if x - curr[-1] < (width * 0.03): 
+                    curr.append(x)
+                else:
+                    unified_x.append(int(np.mean(curr)))
+                    curr = [x]
+            unified_x.append(int(np.mean(curr)))
+
+        if unified_x:
+            fret1_x = unified_x[-1] 
+        else:
+            fret1_x = int(width * 0.8) 
+
+        final_frets_x = []
+        
+        nut_gap = initial_gap / shrink_ratio
+        nut_x = int(fret1_x + nut_gap)
+        final_frets_x.append(nut_x)
+        final_frets_x.append(int(fret1_x))
+
+        current_x = fret1_x
+        current_gap = initial_gap
+
+        for i in range(2, 4): 
+            next_x = int(current_x - current_gap)
+            final_frets_x.append(next_x)
+            current_x = next_x
+            current_gap *= shrink_ratio 
+
+        final_frets_x.sort()
+
+        # =========================================================
+        # STEP 7: THE FINAL BOUNDED FRETBOARD MATRIX (6x4 GRID)
+        # =========================================================
+        grid_frets_x = final_frets_x
+        final_strings_equations.sort(key=lambda eq: eq[1]) 
+
+        fretboard_matrix = []
+
+        for string_idx, (m, q) in enumerate(final_strings_equations):
+            string_nodes = []
+            for fret_x in grid_frets_x:
+                intersect_y = int(m * fret_x + q)
+                string_nodes.append((int(fret_x), intersect_y))
+            fretboard_matrix.append(string_nodes)
+
+        # =========================================================
+        # STEP 8: THE DOMINANT BLOB (EXTRACTING THE HAND ONLY)
+        # =========================================================
+        img_rgb = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
+        R = img_rgb[:,:,0]
+        G = img_rgb[:,:,1]
+        B = img_rgb[:,:,2]
+
+        skin_mask = (R > 95) & (G > 40) & (B > 20) & ((R.astype(int) - G.astype(int)) > 15) & (R > G) & (R > B)
+        skin_mask = (skin_mask.astype(np.uint8) * 255)
+
+        left_cut = int(width * 0.4) 
+        skin_mask[:, :left_cut] = 0
+
+        kernel_massive = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        hand_only_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel_massive)
+
+        # =========================================================
+        # STEP 9: CHORD SIGNATURE EXTRACTION (18-FEATURE VECTOR)
+        # =========================================================
+        chord_signature = [] # Will contain exactly 18 floats (percentages)
+        debug_grid = original_frame.copy()
+
+        num_strings = len(fretboard_matrix)
+        num_frets = len(grid_frets_x) # 4 (Nut + 3 frets)
+
+        # Create the 18 cells
+        for string_idx in range(num_strings):
+            for fret_idx in range(num_frets - 1):
+                left_node = fretboard_matrix[string_idx][fret_idx]
+                right_node = fretboard_matrix[string_idx][fret_idx + 1]
+                
+                # Define the box (Cell) around this string segment
+                cell_margin_y = 12 
+                x_left = left_node[0]
+                x_right = right_node[0]
+                y_top = min(left_node[1], right_node[1]) - cell_margin_y
+                y_bottom = max(left_node[1], right_node[1]) + cell_margin_y
+                
+                # Crop this single cell from the skin mask
+                cell_crop = skin_mask[max(0, y_top):min(height, y_bottom), max(0, x_left):min(width, x_right)]
+                
+                if cell_crop.size > 0:
+                    # Calculate the percentage of white (skin/obstacle) in this cell
+                    white_pixels = cv2.countNonZero(cell_crop)
+                    total_pixels = cell_crop.shape[0] * cell_crop.shape[1]
+                    density = round(white_pixels / total_pixels, 3) # Round to 3 decimals
+                else:
+                    density = 0.0
+                    
+                chord_signature.append(density)
+                
+                # Visualization: Color the cell based on how "full" it is
+                # The fuller it is, the more intense the red rectangle
+                color_intensity = int(density * 255)
+                cv2.rectangle(debug_grid, (x_left, y_top), (x_right, y_bottom), (0, 0, color_intensity), 2)
+                
+                # Write the value in the center (scaled up slightly for 4K visibility)
+                cv2.putText(debug_grid, f"{density:.2f}", (x_left + 5, y_top + 25), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+
+        # Save the visualization to VIZ_DIR
+        cv2.imwrite(os.path.join(VIZ_DIR, f"signature_{filename}"), debug_grid)
+        
+        # Write the 18 features to the CSV
+        csv_writer.writerow([filename, label] + chord_signature)
+        
+        print(f"   [OK] {filename} -> Features Extracted. Signature: {chord_signature[:3]}...")
+
+print(f"\nMasterpiece Complete! Pipeline successfully executed on all frames.")
+print(f"- Visualizations saved in: {VIZ_DIR}")
+print(f"- Extracted Data saved to: {CSV_PATH}")

@@ -61,20 +61,17 @@ def main():
         for segment in data.get("segments", []):
             label = segment.get("label")
             
-            # Skip noise segments ('N')
-            if label != "N":
-                segment_count += 1
-                start = segment.get("start")
-                end = segment.get("end")
-                midpoint = start + (end - start) / 2.0
-                
-                # Create a unique output filename: e.g., A_01_seg1_A.jpg
-                video_base_name = os.path.splitext(video_filename)[0]
-                output_filename = f"{video_base_name}_seg{segment_count}_{label}.jpg"
-                output_path = os.path.join(output_dir, output_filename)
-                
-                print(f"Processing: {video_filename} | Label: {label} | Midpoint: {midpoint:.3f}s")
-                process_and_save_frame(video_path, midpoint, output_path)
+            segment_count += 1
+            start = segment.get("start")
+            end = segment.get("end")
+            midpoint = start + (end - start) / 2.0
+            
+            video_base_name = os.path.splitext(video_filename)[0]
+            output_filename = f"{label}_{video_base_name}_seg{segment_count}.jpg"
+            output_path = os.path.join(output_dir, output_filename)
+            
+            print(f"Processing: {video_filename} | Label: {label} | Midpoint: {midpoint:.3f}s")
+            process_and_save_frame(video_path, midpoint, output_path)
 
     print("--- Data Ingestion Completed Successfully ---")
 
