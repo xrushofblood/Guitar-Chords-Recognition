@@ -28,9 +28,15 @@ print(f"Found {len(files)} frames. Running Full Pipeline (Steps 2 through 9)..."
 with open(CSV_PATH, mode='w', newline='') as csv_file:
     csv_writer = csv.writer(csv_file)
     
-    # Create header: filename, label, cell_0, cell_1, ..., cell_17
-    header = ['filename', 'label'] + [f'cell_{i}' for i in range(18)]
+    # Create header: 18 skin features + 18 edge features + 2 center of mass = 38 features
+    header = ['filename', 'label']
+    for i in range(18):
+        header.extend([f'skin_{i}', f'edge_{i}'])
+    
+    header.extend(['hand_center_y', 'hand_center_x'])
+    
     csv_writer.writerow(header)
+    print(f"Header written to {CSV_PATH}")
 
     for filename in files:
         img_path = os.path.join(INPUT_DIR, filename)
@@ -199,8 +205,15 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         string_fence_mask = np.zeros_like(preprocessed_frets)
         cv2.fillPoly(string_fence_mask, [pts], 255)
 
+        # Applying mask to focus only on the fretboard area
         roi_frets = cv2.bitwise_and(preprocessed_frets, string_fence_mask)
+
+        # --- LEFT CROP: Hide picking hand ---
         cv2.rectangle(roi_frets, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
+
+        # --- RIGHT CROP: Hide the headstock/nut ---
+        headstock_cut = int(width * 0.20)
+        cv2.rectangle(roi_frets, (width - headstock_cut, 0), (width, height), (0, 0, 0), -1)
 
         min_length_fret = int(height * 0.10) 
         max_gap_fret = int(height * 0.05)
@@ -257,7 +270,7 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         initial_gap = width * 0.12
         shrink_ratio = 0.80
 
-        raw_frets_x = sorted([f['x'] for f in clean_unified_frets if (f['y2'] - f['y1']) > height * 0.15])
+        raw_frets_x = sorted([f['x'] for f in clean_unified_frets if (f['y2'] - f['y1']) > height * 0.05])
         unified_x = []
 
         if raw_frets_x:
@@ -276,12 +289,16 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
             fret1_x = int(width * 0.8) 
 
         final_frets_x = []
-        
+
+        # GENERATION OF THE NUT (TO THE RIGHT OF FRET 1)
         nut_gap = initial_gap / shrink_ratio
         nut_x = int(fret1_x + nut_gap)
         final_frets_x.append(nut_x)
+
+        # SAVING FRET 1
         final_frets_x.append(int(fret1_x))
 
+        # PROJECTION OF FRETS 2 AND 3 (TOWARDS THE LEFT)
         current_x = fret1_x
         current_gap = initial_gap
 
@@ -291,6 +308,7 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
             current_x = next_x
             current_gap *= shrink_ratio 
 
+        # Sort the array from the left to right for Step 7
         final_frets_x.sort()
 
         # =========================================================
@@ -319,61 +337,95 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         skin_mask = (R > 95) & (G > 40) & (B > 20) & ((R.astype(int) - G.astype(int)) > 15) & (R > G) & (R > B)
         skin_mask = (skin_mask.astype(np.uint8) * 255)
 
-        left_cut = int(width * 0.4) 
+        # FIX 1: Lowered from 0.4 to 0.3 to prevent cutting off fingers on the brown guitar
+        left_cut = int(width * 0.3) 
         skin_mask[:, :left_cut] = 0
 
         kernel_massive = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        
+        # OPEN: Removes background noise (thin lines, wood reflections)
         hand_only_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel_massive)
+        
+        # FIX 2: CLOSE: Fills in holes and shadows inside the hand to make it a solid blob
+        hand_only_mask = cv2.morphologyEx(hand_only_mask, cv2.MORPH_CLOSE, kernel_massive)
+
+        # FIX 3: Reassign to skin_mask so Step 9 uses the solid, cleaned blob for CSV densities
+        skin_mask = hand_only_mask
 
         # =========================================================
-        # STEP 9: CHORD SIGNATURE EXTRACTION (18-FEATURE VECTOR)
+        # STEP 9: 38-FEATURE VECTOR (SKIN + BOOSTED EDGES + COM)
         # =========================================================
-        chord_signature = [] # Will contain exactly 18 floats (percentages)
+        # 1. Generate Edges and BOOST them (Dilation makes lines thicker/heavier)
+        edges = cv2.Canny(blurred, 30, 100)
+        kernel_edge = np.ones((3, 3), np.uint8)
+        dilated_edges = cv2.dilate(edges, kernel_edge, iterations=1)
+        hand_edges = cv2.bitwise_and(dilated_edges, skin_mask)
+
+        chord_signature = [] 
+        all_skin_densities = [] # Used to calculate the center of mass later
         debug_grid = original_frame.copy()
 
         num_strings = len(fretboard_matrix)
-        num_frets = len(grid_frets_x) # 4 (Nut + 3 frets)
+        num_frets = len(grid_frets_x) 
 
-        # Create the 18 cells
         for string_idx in range(num_strings):
             for fret_idx in range(num_frets - 1):
                 left_node = fretboard_matrix[string_idx][fret_idx]
                 right_node = fretboard_matrix[string_idx][fret_idx + 1]
                 
-                # Define the box (Cell) around this string segment
                 cell_margin_y = 12 
                 x_left = left_node[0]
                 x_right = right_node[0]
                 y_top = min(left_node[1], right_node[1]) - cell_margin_y
                 y_bottom = max(left_node[1], right_node[1]) + cell_margin_y
                 
-                # Crop this single cell from the skin mask
-                cell_crop = skin_mask[max(0, y_top):min(height, y_bottom), max(0, x_left):min(width, x_right)]
+                skin_crop = skin_mask[max(0, y_top):min(height, y_bottom), max(0, x_left):min(width, x_right)]
+                edge_crop = hand_edges[max(0, y_top):min(height, y_bottom), max(0, x_left):min(width, x_right)]
                 
-                if cell_crop.size > 0:
-                    # Calculate the percentage of white (skin/obstacle) in this cell
-                    white_pixels = cv2.countNonZero(cell_crop)
-                    total_pixels = cell_crop.shape[0] * cell_crop.shape[1]
-                    density = round(white_pixels / total_pixels, 3) # Round to 3 decimals
-                else:
-                    density = 0.0
+                if skin_crop.size > 0:
+                    total_pixels = skin_crop.shape[0] * skin_crop.shape[1]
+                    s_den = round(cv2.countNonZero(skin_crop) / total_pixels, 3)
                     
-                chord_signature.append(density)
-                
-                # Visualization: Color the cell based on how "full" it is
-                # The fuller it is, the more intense the red rectangle
-                color_intensity = int(density * 255)
-                cv2.rectangle(debug_grid, (x_left, y_top), (x_right, y_bottom), (0, 0, color_intensity), 2)
-                
-                # Write the value in the center (scaled up slightly for 4K visibility)
-                cv2.putText(debug_grid, f"{density:.2f}", (x_left + 5, y_top + 25), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                    # BOOST EDGES: We multiply by 10 to give edges a similar "weight" to skin density
+                    edge_raw_density = cv2.countNonZero(edge_crop) / total_pixels
+                    if edge_raw_density > 0.01:
+                        e_den = 0.8  
+                    else:
+                        e_den = 0.0 
+                else:
+                    s_den, e_den = 0.0, 0.0
+                    
+                chord_signature.extend([s_den, e_den])
+                all_skin_densities.append(s_den)
 
-        # Save the visualization to VIZ_DIR
-        cv2.imwrite(os.path.join(VIZ_DIR, f"signature_{filename}"), debug_grid)
+        # --- NEW: CALCULATE CENTER OF MASS ---
+        # This tells the model if the hand is high (Strings 0-2) or low (Strings 3-5)
+        # We only consider cells with significant skin presence (> 10%)
+        active_cells = [i for i, val in enumerate(all_skin_densities) if val > 0.1]
         
-        # Write the 18 features to the CSV
-        csv_writer.writerow([filename, label] + chord_signature)
+        if active_cells:
+            avg_idx = np.mean(active_cells)
+            center_y = round(avg_idx / 3.0, 2) # Average String position
+            center_x = round(avg_idx % 3.0, 2) # Average Fret position
+        else:
+            center_y, center_x = 0.0, 0.0
+
+        # Final 38-feature vector
+        final_features = chord_signature + [center_y, center_x]
+
+        # Write to CSV
+        csv_writer.writerow([filename, label] + final_features)
+        
+        # --- VISUALIZATION UPDATE ---
+        # Draw a yellow circle at the Center of Mass to verify it's working
+        if center_y > 0:
+            # Simple mapping from grid coords to pixel coords for visualization
+            viz_x = int(grid_frets_x[int(min(center_x, 2))])
+            viz_y = int(final_strings_equations[int(min(center_y, 5))][1])
+            cv2.circle(debug_grid, (viz_x, viz_y), 10, (0, 255, 255), -1)
+            cv2.putText(debug_grid, "COM", (viz_x+15, viz_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+
+        cv2.imwrite(os.path.join(VIZ_DIR, f"signature_{filename}"), debug_grid)
         
         print(f"   [OK] {filename} -> Features Extracted. Signature: {chord_signature[:3]}...")
 

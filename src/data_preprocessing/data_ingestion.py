@@ -6,7 +6,6 @@ import glob
 def process_and_save_frame(video_path, target_time_sec, output_path):
     """
     Extracts a raw frame at a specific timestamp and saves it directly.
-    No visual preprocessing is applied here to preserve data for MediaPipe.
     """
     cap = cv2.VideoCapture(video_path)
     
@@ -14,7 +13,6 @@ def process_and_save_frame(video_path, target_time_sec, output_path):
         print(f"Error: Could not open video at {video_path}")
         return False
         
-    # Set position in milliseconds
     cap.set(cv2.CAP_PROP_POS_MSEC, target_time_sec * 1000.0)
     success, frame = cap.read()
     cap.release()
@@ -23,20 +21,16 @@ def process_and_save_frame(video_path, target_time_sec, output_path):
         print(f"Error: Frame extraction failed at {target_time_sec}s for {video_path}")
         return False
 
-    # Save the raw, original color image
     cv2.imwrite(output_path, frame)
     return True
 
 def main():
-    # Define directory paths
     annotations_dir = "data/annotations"
     videos_dir = "data/raw_videos"
     output_dir = "data/processed_frames"
     
-    # Ensure the output directory exists
     os.makedirs(output_dir, exist_ok=True)
     
-    # Find all JSON annotation files
     json_files = glob.glob(os.path.join(annotations_dir, "*.json"))
     
     if not json_files:
@@ -52,7 +46,6 @@ def main():
         video_filename = data.get("video")
         video_path = os.path.join(videos_dir, video_filename)
         
-        # Check if the video file exists
         if not os.path.exists(video_path):
             print(f"Warning: Video file {video_filename} not found in {videos_dir}. Skipping.")
             continue
@@ -60,18 +53,36 @@ def main():
         segment_count = 0
         for segment in data.get("segments", []):
             label = segment.get("label")
-            
-            segment_count += 1
             start = segment.get("start")
             end = segment.get("end")
-            midpoint = start + (end - start) / 2.0
-            
+            duration = end - start
             video_base_name = os.path.splitext(video_filename)[0]
-            output_filename = f"{label}_{video_base_name}_seg{segment_count}.jpg"
-            output_path = os.path.join(output_dir, output_filename)
             
-            print(f"Processing: {video_filename} | Label: {label} | Midpoint: {midpoint:.3f}s")
-            process_and_save_frame(video_path, midpoint, output_path)
+            segment_count += 1
+            
+            # --- THE NEW MULTI-FRAME LOGIC ---
+            if label == "N":
+                # For Nulls, keep the old logic: just 1 frame in the middle
+                midpoint = start + (duration / 2.0)
+                output_filename = f"{label}_{video_base_name}_seg{segment_count}_mid.jpg"
+                output_path = os.path.join(output_dir, output_filename)
+                print(f"Processing: {video_filename} | Label: {label} | Time: {midpoint:.3f}s")
+                process_and_save_frame(video_path, midpoint, output_path)
+                
+            else:
+                # For Chords, extract 3 frames (25%, 50%, 75% of the segment)
+                # We avoid the exact start/end to ensure the fingers are fully placed
+                points = [
+                    start + (duration * 0.25),
+                    start + (duration * 0.50),
+                    start + (duration * 0.75)
+                ]
+                
+                for idx, pt in enumerate(points):
+                    output_filename = f"{label}_{video_base_name}_seg{segment_count}_pt{idx+1}.jpg"
+                    output_path = os.path.join(output_dir, output_filename)
+                    print(f"Processing: {video_filename} | Label: {label} | Time: {pt:.3f}s")
+                    process_and_save_frame(video_path, pt, output_path)
 
     print("--- Data Ingestion Completed Successfully ---")
 
