@@ -1,0 +1,14 @@
+{
+"video": "Am_10.mp4",
+"segments": [
+{ "start": 0.0, "end": 5.23, "label": "Am" },
+{ "start": 5.23, "end": 5.27, "label": "N" },
+{ "start": 5.27, "end": 6.59, "label": "Am" },
+{ "start": 6.59, "end": 6.74, "label": "N" },
+{ "start": 6.74, "end": 7.71, "label": "Am" },
+{ "start": 7.71, "end": 7.99, "label": "N" },
+{ "start": 7.99, "end": 13.32, "label": "Am" },
+{ "start": 13.32, "end": 14.28, "label": "N" },
+{ "start": 14.28, "end": 15.00, "label": "Am" }
+]
+}

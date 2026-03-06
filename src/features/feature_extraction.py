@@ -82,19 +82,19 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         if not clean_strings_segments: continue
 
         # =========================================================
-        # STEP 3C: PERSPECTIVE STRING INFERENCE
+        # STEP 3C: PERSPECTIVE STRING INFERENCE (ANCHOR-BASED)
         # =========================================================
+        # 1. CLUSTERING: Group segments by their central Y coordinate (yc)
         segments_with_yc = []
         for line in clean_strings_segments:
             x1, y1, x2, y2 = line[0]
-            if x1 == x2: x2 += 1 
-            m = (y2 - y1) / (x2 - x1)
+            m = (y2 - y1) / (x2 - x1 + 1e-6)
             q = y1 - m * x1
             yc = m * (width / 2) + q
             segments_with_yc.append((yc, x1, y1, x2, y2))
 
         segments_with_yc.sort(key=lambda x: x[0])
-
+        
         groups = []
         y_tol = height * 0.02 
         if segments_with_yc:
@@ -107,6 +107,7 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
                     curr_group = [seg]
             groups.append(curr_group)
 
+        # 2. LINE REGRESSION: Find unique lines from groups
         detected_strings = []
         for g in groups:
             X, Y = [], []
@@ -116,36 +117,41 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
             m, q = np.polyfit(X, Y, 1)
             yc = m * (width / 2) + q
             detected_strings.append({'yc': yc, 'm': m, 'q': q})
-
+        
         detected_strings.sort(key=lambda x: x['yc'])
 
-        # --- THE NECK KILLER ---
+        # 3. NECK KILLER & ANCHOR IDENTIFICATION
+        # We use the gap between detected lines to filter out the wood edge (Neck)
         if len(detected_strings) >= 3:
             gaps = np.diff([s['yc'] for s in detected_strings])
-            single_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
-            base_gap = np.median(single_gaps) if single_gaps else (np.min(gaps)/2 if len(gaps)>0 else 100)
+            valid_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
+            base_gap = np.median(valid_gaps) if valid_gaps else (np.min(gaps)/2 if len(gaps)>0 else 100)
 
+            # If the first gap is too small (Neck edge), discard the top-most line
             if gaps[0] < base_gap * NECK_EDGE_RATIO:
+                print(f"   [INFO] Neck edge detected and removed for {filename}")
                 detected_strings.pop(0) 
 
-        # 3. ASSIGN LOGICAL INDICES
+        # 4. LOGICAL INDEXING (Anchor: 6th String down to 1st)
         final_strings_equations = [] 
-        
         if len(detected_strings) >= 1:
             indices = [0]
             if len(detected_strings) > 1:
                 gaps = np.diff([s['yc'] for s in detected_strings])
-                single_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
-                base_gap = np.median(single_gaps) if single_gaps else (np.min(gaps)/2 if len(gaps)>0 else 100)
+                valid_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
+                base_gap = np.median(valid_gaps) if valid_gaps else 100
                 
                 for i in range(1, len(detected_strings)):
                     gap = detected_strings[i]['yc'] - detected_strings[i-1]['yc']
+                    # Calculate how many string gaps are between this and the anchor
                     steps = max(1, round(gap / base_gap))
                     indices.append(indices[-1] + steps)
 
+            # Assign logical positions (0-5) based on screen position
             top_y = detected_strings[0]['yc']
             bottom_y = detected_strings[-1]['yc']
             
+            # Determine if we anchor from S6 (top) or S1 (bottom)
             if top_y > height - bottom_y:
                 shift = 5 - indices[-1]
             else:
@@ -154,26 +160,20 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
             indices = [i + shift for i in indices]
             valid_data = [(idx, s) for idx, s in zip(indices, detected_strings) if 0 <= idx <= 5]
 
-            # 4. SECOND REGRESSION: Perspective Model
+            # 5. FINAL REGRESSION: Standardize the 6 master strings
             if len(valid_data) >= 2:
-                idx_list = [v[0] for v in valid_data]
-                m_list = [v[1]['m'] for v in valid_data]
-                q_list = [v[1]['q'] for v in valid_data]
-                
-                m_model = np.polyfit(idx_list, m_list, 1)
-                q_model = np.polyfit(idx_list, q_list, 1)
+                m_model = np.polyfit([v[0] for v in valid_data], [v[1]['m'] for v in valid_data], 1)
+                q_model = np.polyfit([v[0] for v in valid_data], [v[1]['q'] for v in valid_data], 1)
+                for i in range(6):
+                    final_strings_equations.append((np.polyval(m_model, i), np.polyval(q_model, i)))
             else:
-                m_model = [0, valid_data[0][1]['m'] if valid_data else 0]
-                q_model = [0, valid_data[0][1]['q'] if valid_data else 0]
-
-            # 5. GENERATE THE 6 MASTER STRINGS
-            for i in range(6):
-                m_i = np.polyval(m_model, i)
-                q_i = np.polyval(q_model, i)
-                final_strings_equations.append((m_i, q_i)) 
-
-        if len(final_strings_equations) < 6:
-            continue
+                # Fallback if only 1 string is detected: infer others downward using base_gap
+                s0 = valid_data[0][1] if valid_data else detected_strings[0]
+                idx0 = valid_data[0][0] if valid_data else 0
+                base_gap = height * 0.04
+                for i in range(6):
+                    offset = (i - idx0) * base_gap
+                    final_strings_equations.append((s0['m'], s0['q'] + offset))
 
         # =========================================================
         # STEP 4: RAW FRET EXTRACTION (Sobel & Hough)

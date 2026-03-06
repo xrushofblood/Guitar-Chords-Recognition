@@ -1,0 +1,14 @@
+{
+"video": "E_09.mp4",
+"segments": [
+{ "start": 0.0, "end": 5.13, "label": "E" },
+{ "start": 5.13, "end": 5.67, "label": "N" },
+{ "start": 5.67, "end": 6.15, "label": "E" },
+{ "start": 6.15, "end": 6.29, "label": "N" },
+{ "start": 6.29, "end": 6.77, "label": "E" },
+{ "start": 6.77, "end": 6.91, "label": "N" },
+{ "start": 6.91, "end": 10.55, "label": "E" },
+{ "start": 10.55, "end": 10.79, "label": "N" },
+{ "start": 10.79, "end": 15.00, "label": "E" }
+]
+}
