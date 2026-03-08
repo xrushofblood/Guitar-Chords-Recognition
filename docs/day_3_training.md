@@ -163,3 +163,25 @@ The final production model is a **Random Forest Classifier** trained on 38 featu
 ## 5. Next Steps
 * The static frame-by-frame machine learning phase is complete.
 * Move to the **Video Inference Phase**: Develop a `predict_video.py` script that applies a **Temporal Smoothing Filter** (e.g., rolling mode/median over 5 frames) to eliminate the isolated false positives caused by chord transitions.
+
+## Current model statistics 
+##################################################
+FINAL TEST ACCURACY: 85.26%
+##################################################
+
+Classification Report:
+              precision    recall  f1-score   support
+
+           A       1.00      1.00      1.00        12
+          Am       0.88      0.88      0.88        32
+           C       1.00      0.96      0.98        24
+           D       0.63      0.92      0.75        13
+          Dm       0.93      0.97      0.95        38
+           E       0.96      0.96      0.96        27
+          Em       0.55      1.00      0.71         6
+           G       0.43      1.00      0.60         6
+           N       1.00      0.38      0.55        32
+
+    accuracy                           0.85       190
+   macro avg       0.82      0.90      0.82       190
+weighted avg       0.90      0.85      0.85       190

@@ -425,10 +425,10 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
             cv2.circle(debug_grid, (viz_x, viz_y), 10, (0, 255, 255), -1)
             cv2.putText(debug_grid, "COM", (viz_x+15, viz_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
-        cv2.imwrite(os.path.join(VIZ_DIR, f"signature_{filename}"), debug_grid)
+        #cv2.imwrite(os.path.join(VIZ_DIR, f"signature_{filename}"), debug_grid)
         
         print(f"   [OK] {filename} -> Features Extracted. Signature: {chord_signature[:3]}...")
 
 print(f"\nMasterpiece Complete! Pipeline successfully executed on all frames.")
-print(f"- Visualizations saved in: {VIZ_DIR}")
+#print(f"- Visualizations saved in: {VIZ_DIR}")
 print(f"- Extracted Data saved to: {CSV_PATH}")
