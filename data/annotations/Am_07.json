@@ -1,0 +1,12 @@
+{
+"video": "Am_07.mp4",
+"segments": [
+{ "start": 0.0, "end": 2.85, "label": "Am" },
+{ "start": 2.85, "end": 3.05, "label": "N" },
+{ "start": 3.05, "end": 9.26, "label": "Am" },
+{ "start": 9.26, "end": 9.77, "label": "N" },
+{ "start": 9.77, "end": 10.01, "label": "Am" },
+{ "start": 10.01, "end": 10.37, "label": "N" },
+{ "start": 10.37, "end": 15.00, "label": "Am" }
+]
+}

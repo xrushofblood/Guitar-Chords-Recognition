@@ -1,0 +1,11 @@
+{
+"video": "D_18.mp4",
+"segments": [
+{ "start": 0.0, "end": 2.82, "label": "D" },
+{ "start": 2.82, "end": 3.65, "label": "N" },
+{ "start": 3.65, "end": 12.41, "label": "D" },
+{ "start": 12.41, "end": 12.63, "label": "N" },
+{ "start": 12.63, "end": 14.67, "label": "D" },
+{ "start": 14.67, "end": 15.00, "label": "N" }
+]
+}

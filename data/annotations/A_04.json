@@ -1,0 +1,10 @@
+{
+"video": "A_04.mp4",
+"segments": [
+{ "start": 0.0, "end": 3.33, "label": "A" },
+{ "start": 3.33, "end": 3.69, "label": "N" },
+{ "start": 3.69, "end": 10.31, "label": "A" },
+{ "start": 10.31, "end": 10.85, "label": "N" },
+{ "start": 10.85, "end": 15.00, "label": "A" }
+]
+}

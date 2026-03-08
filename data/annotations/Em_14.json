@@ -1,0 +1,10 @@
+{
+"video": "Em_14.mp4",
+"segments": [
+{ "start": 0.0, "end": 1.36, "label": "Em" },
+{ "start": 1.36, "end": 2.25, "label": "N" },
+{ "start": 2.25, "end": 9.73, "label": "Em" },
+{ "start": 9.73, "end": 10.49, "label": "N" },
+{ "start": 10.49, "end": 15.00, "label": "Em" }
+]
+}

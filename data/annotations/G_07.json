@@ -1,0 +1,8 @@
+{
+"video": "G_07.mp4",
+"segments": [
+{ "start": 0.0, "end": 5.96, "label": "G" },
+{ "start": 5.96, "end": 7.73, "label": "N" },
+{ "start": 7.73, "end": 15.00, "label": "G" }
+]
+}

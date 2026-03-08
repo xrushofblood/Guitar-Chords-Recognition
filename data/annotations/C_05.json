@@ -1,0 +1,8 @@
+{
+    "video": "C_05.mp4",
+    "segments": [
+        {"start": 0.0, "end": 7.36, "label": "C"},
+        {"start": 7.36, "end": 8.08, "label": "N"},
+        {"start": 8.08, "end": 15.00, "label": "C"}
+    ]
+}

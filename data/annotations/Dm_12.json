@@ -1,0 +1,8 @@
+{
+"video": "Dm_12.mp4",
+"segments": [
+{ "start": 0.0, "end": 6.73, "label": "Dm" },
+{ "start": 6.73, "end": 7.70, "label": "N" },
+{ "start": 7.70, "end": 15.00, "label": "Dm" }
+]
+}

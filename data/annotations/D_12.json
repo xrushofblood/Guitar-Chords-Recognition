@@ -1,0 +1,8 @@
+{
+"video": "D_12.mp4",
+"segments": [
+{ "start": 0.0, "end": 2.39, "label": "D" },
+{ "start": 2.39, "end": 3.35, "label": "N" },
+{ "start": 3.35, "end": 15.00, "label": "D" }
+]
+}

@@ -1,0 +1,12 @@
+{
+"video": "E_02.mp4",
+"segments": [
+{ "start": 0.0, "end": 0.64, "label": "E" },
+{ "start": 0.64, "end": 0.90, "label": "N" },
+{ "start": 0.90, "end": 4.69, "label": "E" },
+{ "start": 4.69, "end": 4.85, "label": "N" },
+{ "start": 4.85, "end": 5.66, "label": "E" },
+{ "start": 5.66, "end": 6.07, "label": "N" },
+{ "start": 6.07, "end": 15.00, "label": "E" }
+]
+}

@@ -1,0 +1,12 @@
+{
+"video": "A_07.mp4",
+"segments": [
+{ "start": 0.0, "end": 0.84, "label": "A" },
+{ "start": 0.84, "end": 1.64, "label": "N" },
+{ "start": 1.64, "end": 4.61, "label": "A" },
+{ "start": 4.61, "end": 5.19, "label": "N" },
+{ "start": 5.19, "end": 12.81, "label": "A" },
+{ "start": 12.81, "end": 13.25, "label": "N" },
+{ "start": 13.25, "end": 15.00, "label": "A" }
+]
+}

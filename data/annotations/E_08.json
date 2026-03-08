@@ -1,0 +1,10 @@
+{
+"video": "E_08.mp4",
+"segments": [
+{ "start": 0.0, "end": 4.67, "label": "E" },
+{ "start": 4.67, "end": 5.03, "label": "N" },
+{ "start": 5.03, "end": 9.83, "label": "E" },
+{ "start": 9.83, "end": 10.17, "label": "N" },
+{ "start": 10.17, "end": 15.00, "label": "E" }
+]
+}

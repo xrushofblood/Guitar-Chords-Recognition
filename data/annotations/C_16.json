@@ -1,0 +1,12 @@
+{
+    "video": "C_16.mp4",
+    "segments": [
+        {"start": 0.0, "end": 0.48, "label": "C"},
+        {"start": 0.48, "end": 1.50, "label": "N"},
+        {"start": 1.50, "end": 6.58, "label": "C"},
+        {"start": 6.58, "end": 7.13, "label": "N"},
+        {"start": 7.13, "end": 13.28, "label": "C"},
+        {"start": 13.28, "end": 13.97, "label": "N"},
+        {"start": 13.97, "end": 15.00, "label": "C"}
+    ]
+}
