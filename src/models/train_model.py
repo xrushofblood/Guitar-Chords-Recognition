@@ -1,93 +1,103 @@
 import os
 import pandas as pd
 import numpy as np
-# CHANGED: Imported StratifiedGroupKFold instead of StratifiedKFold
-from sklearn.model_selection import StratifiedGroupKFold, cross_val_predict
+import matplotlib.pyplot as plt
+import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, accuracy_score
+from sklearn.model_selection import GroupShuffleSplit, StratifiedGroupKFold, cross_val_predict
+from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 import joblib
 
-def train_with_cross_validation():
-    # Setup dynamic paths
+# --- NEW FUNCTION: SAVE CONFUSION MATRIX ---
+def save_confusion_matrix(y_true, y_pred, labels, output_path):
+    """
+    Creates and saves a visual heatmap of the confusion matrix.
+    """
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    plt.figure(figsize=(12, 9))
+    
+    # annot=True writes the numbers, fmt='d' ensures they are integers
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=labels, yticklabels=labels)
+    
+    plt.xlabel('Predicted Label', fontsize=12, fontweight='bold')
+    plt.ylabel('True Label', fontsize=12, fontweight='bold')
+    plt.title('Confusion Matrix - Guitar Chord Recognition', fontsize=15)
+    
+    # Save the figure
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"\n[INFO] Confusion Matrix saved to: {output_path}")
+
+def train_guitar_model():
+    # 1. SETUP PATHS
     current_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
-    
     data_path = os.path.join(project_root, "data", "extracted_features", "chord_features_clean.csv")
-    model_dir = os.path.join(project_root, "models")
-    model_path = os.path.join(model_dir, "rf_chord_classifier.pkl")
+    model_save_path = os.path.join(project_root, "models", "guitar_chord_rf_model.pkl")
+    matrix_save_path = os.path.join(project_root, "models", "confusion_matrix.png")
 
-    os.makedirs(model_dir, exist_ok=True)
-
-    print(f"Loading dataset from: {data_path}")
-    try:
-        df = pd.read_csv(data_path)
-    except FileNotFoundError:
-        print("Error: Cleaned CSV not found. Please run the data cleaner script first.")
+    if not os.path.exists(data_path):
+        print(f"Error: Dataset not found at {data_path}")
         return
 
-    # =========================================================
-    # NEW: CREATE GROUPS TO PREVENT LEAKAGE
-    # =========================================================
-    # Extracts the video ID (e.g., "Em_Em_02") from the filename
+    # 2. LOAD DATASET
+    df = pd.read_csv(data_path)
     df['group'] = df['filename'].apply(lambda x: "_".join(str(x).split('_')[:3]))
-    groups = df['group']
-
-    # Extract features and labels. We also drop the 'group' column so it's not used as a feature!
+    
     X = df.drop(columns=['filename', 'label', 'group'])
     y = df['label']
+    groups = df['group']
 
-    print(f"Total samples loaded: {len(X)}")
-    print(f"Total UNIQUE videos (groups): {groups.nunique()}") # Tells you how many real videos you have
-    
-    print("\nClass distribution:")
-    print(y.value_counts())
-    
-    # Check the smallest class to avoid K-Fold crashing
-    min_class_count = y.value_counts().min()
-    k_folds = min(5, min_class_count)
-    
-    if k_folds < 2:
-        print("\nError: You have a chord with only 1 sample. Cross-validation requires at least 2.")
-        return
-
-    print(f"\nInitializing {k_folds}-Fold STRATIFIED GROUP Cross-Validation...")
-    print("The model is now forced to test on completely unseen videos to prevent data leakage.")
-    
-    # Initialize Random Forest with optimized parameters for small datasets
-    
+    # 3. DEFINE MODEL (Using your Winning Parameters)
     rf_model = RandomForestClassifier(
-        n_estimators=800,           # More trees for stability
-        max_depth=8,               # Limit depth to prevent learning specific hand-shapes by heart
-        min_samples_leaf=6,         # Each "answer" must be based on at least 4 different samples
-        max_features='log2',        # Look at fewer features at a time to find more robust rules
+        n_estimators=1000,
+        max_depth=15,
+        min_samples_leaf=1,
+        min_samples_split=2,
+        max_features='log2',
+        criterion='gini',
         class_weight='balanced',
-        criterion='entropy',
-        random_state=42 
+        random_state=42,
+        n_jobs=-1
     )
-    
-    # CHANGED: StratifiedGroupKFold ensures no video is split between train and test
-    cv = StratifiedGroupKFold(n_splits=k_folds, shuffle=True, random_state=42)
-    
-    # CHANGED: Passed the 'groups' parameter to cross_val_predict
-    y_pred_cv = cross_val_predict(rf_model, X, y, groups=groups, cv=cv)
-    
-    # Calculate the real overall metrics
-    overall_accuracy = accuracy_score(y, y_pred_cv)
-    
-    print("\n" + "="*50)
-    print(f"REAL CROSS-VALIDATED ACCURACY: {overall_accuracy * 100:.2f}%")
-    print("="*50 + "\n")
-    
-    print("Aggregated Classification Report (across all strictly isolated folds):")
-    print(classification_report(y, y_pred_cv, zero_division=0))
 
-    # Finally, train on 100% of the data to build the smartest possible final model
-    print("\nTraining the final production model on 100% of the dataset...")
-    rf_model.fit(X, y)
+    # 4. BALANCED TRAIN/TEST SPLIT (Group-Aware)
+    # Using random_state=15 as per your last attempt
+    gss = GroupShuffleSplit(n_splits=1, train_size=0.8, random_state=15)
+    train_idx, test_idx = next(gss.split(X, y, groups))
+
+    X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
+    y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+    groups_train = groups.iloc[train_idx]
+
+    # 5. INTERNAL CROSS-VALIDATION
+    print("\n[STEP] Performing Internal Cross-Validation...")
+    sgkf = StratifiedGroupKFold(n_splits=5)
+    cv_preds = cross_val_predict(rf_model, X_train, y_train, groups=groups_train, cv=sgkf)
+    print(f"INTERNAL CV ACCURACY: {accuracy_score(y_train, cv_preds) * 100:.2f}%")
+
+    # 6. FINAL EVALUATION ON TEST SET
+    print("[STEP] Training on full Train set and testing on Unseen Videos...")
+    rf_model.fit(X_train, y_train)
+    final_preds = rf_model.predict(X_test)
     
-    # Save the model
-    joblib.dump(rf_model, model_path)
-    print(f"Final model successfully saved to: {model_path}")
+    print("\n" + "#"*50)
+    print(f"FINAL TEST ACCURACY: {accuracy_score(y_test, final_preds) * 100:.2f}%")
+    print("#"*50)
+    print("\nClassification Report:")
+    print(classification_report(y_test, final_preds, zero_division=0))
+
+    # --- 7. NEW: GENERATE CONFUSION MATRIX IMAGE ---
+    all_labels = sorted(y.unique())
+    save_confusion_matrix(y_test, final_preds, all_labels, matrix_save_path)
+
+    # 8. PRODUCTION TRAINING & SAVING
+    print(f"\n[STEP] Saving final production model...")
+    rf_model.fit(X, y) # Train on 100% of data for the final file
+    joblib.dump(rf_model, model_save_path)
+    print("Process completed successfully!")
 
 if __name__ == "__main__":
-    train_with_cross_validation()
+    train_guitar_model()

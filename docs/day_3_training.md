@@ -88,3 +88,78 @@ When introducing a second guitar (brown) held at a completely different, steeper
 * **Expand Dataset:** Priority #1. Increase the number of unique videos to provide more variants of hand positions.
 * **Feature Granularity:** Consider a denser grid or "String Deltas" (calculating the difference between adjacent cells).
 * **Hierarchical Modeling:** Experiment with a two-step classification: 1. Detect "Chord Shape Group" -> 2. Specific Major/Minor detector.
+
+## Trial 6: Smart Null Cleaning & Final Data Ingestion
+* **Action:** Implemented `smart_data_cleaning()` using proportional sampling from chord transitions (N_A, N_Dm, etc.) and keeping all pure empty frames.
+* **Dataset Size:** Increased to 1088 samples from 187 unique videos.
+* **Winning Params applied:** {'max_depth': 10, 'min_samples_leaf': 1, 'max_features': 'log2', 'n_estimators': 500}
+* **Result:** **STABLE ACCURACY: 78.24%** on unseen videos.
+* **Breakthrough:** Recall for **Am (0.93)** and **Dm (1.00)** reached near-perfect levels, solving the major/minor deadlock.
+
+## Current Status & Observations
+1. **The "G" Gap:** Due to random grouping in the 20% test split, the chord G had 0 support in the final report, though it performed well in internal CV (81.45%).
+2. **Em Over-prediction:** Precision for Em is low (0.46), indicating the model is using Em as a "fallback" for noisy Null frames.
+3. **Model Stability:** The gap between Internal CV (81.45%) and Test Accuracy (78.24%) is very small, proving the model is not overfitting and generalizes well to new videos.
+
+# Day 3: Data Expansion, Smart Cleaning & Hyperparameter Tuning
+
+**Date:** 2026-03-08  
+**Phase:** Dataset Scaling and Model Finalization  
+**Project:** Guitar-Chords-Recognition  
+
+## 1. Objectives
+* Overcome the ~60% accuracy plateau caused by data overlap between Major and Minor chords (e.g., E vs Am, D vs Dm).
+* Eliminate the model's tendency to use the majority classes or "Null" as a fallback for uncertain frames.
+* Finalize the Random Forest architecture using robust validation strategies (`GroupShuffleSplit`).
+
+## 2. Experimental Log: Trials & Errors
+
+### Trial 1: Pure Edge Density (Failed)
+* **Action:** Added Canny Edge Detection without thresholding.
+* **Result:** Signal was too weak (values around 0.01). The model ignored edges and failed to differentiate minor chords.
+
+### Trial 2: Boosted Edges + Center of Mass (Partial Success)
+* **Action:** Applied dilation and binary thresholding (0.8/0.0) to edges. Added spatial coordinates (`hand_center_y`, `hand_center_x`).
+* **Result:** Accuracy jumped to ~60%. The model gained spatial awareness but still sacrificed Am and Dm to protect the precision of E and D.
+
+### Trial 3: Aggressive Random Forest Parameters (Failed)
+* **Action:** Forced `min_samples_leaf=1` and applied extreme manual weights to Am/Dm without increasing the dataset size.
+* **Result:** Accuracy dropped to ~50%. The model overfitted on noise because it lacked sufficient varied examples.
+
+### Trial 4: Random Null Downsampling (Failed)
+* **Action:** Randomly reduced Class `N` (Null) to 35 samples to balance the dataset.
+* **Result:** The model lost the ability to understand chord "transitions", causing false positives.
+
+### Trial 5: Dataset Expansion & "Smart" Stratified Cleaning (Success)
+* **Action:** Ingested new JSON files, increasing the dataset from ~54 to 187 unique videos (1088 frames). Implemented `smart_data_cleaning()` to keep all pure empty guitar frames while proportionally sampling 10 transition frames per chord (e.g., hands moving to play an 'A').
+* **Result:** Provided the model with crucial "negative examples" for every chord. 
+
+### Trial 6: Probability Thresholding (Discarded)
+* **Action:** Implemented a strict 70% confidence threshold (`predict_proba()`), forcing uncertain predictions to 'N'.
+* **Result:** Accuracy plummeted to 68.42%. It successfully cleaned false positives but was too timid, discarding valid chord predictions.
+
+### Trial 7: F1-Macro Grid Search (Final Victory)
+* **Action:** Ran a comprehensive GridSearchCV using `f1_macro` scoring to protect minority classes, evaluated with `StratifiedGroupKFold`.
+* **Result:** Found the optimal mathematical balance for the Random Forest, pushing accuracy beyond 85%.
+
+## 3. Final Model Architecture & Parameters
+The final production model is a **Random Forest Classifier** trained on 38 features (18 skin densities, 18 binary edge densities, 2 COM coordinates). 
+
+**Winning Parameters:**
+* `n_estimators`: 1000 (Maximum voting stability against transition noise)
+* `max_depth`: 15 (Deep enough to separate overlapping classes like Am/E)
+* `min_samples_leaf`: 1 (High sensitivity to capture critical edge pixels)
+* `min_samples_split`: 2
+* `max_features`: 'log2' (Forces trees to rely on diverse features, highlighting the COM)
+* `criterion`: 'gini' (Efficiently splits binary edge features)
+* `class_weight`: 'balanced'
+
+## 4. Final Results & Confusion Matrix Analysis
+* **Internal CV Accuracy:** ~80%
+* **Unseen Test Accuracy:** **85.26%**
+* **Breakthrough:** The minor chord deadlock is completely solved (`Am` F1-score: 0.88, `Dm` F1-score: 0.95).
+* **Limitations:** The Confusion Matrix shows that the remaining errors are isolated in the `N` (Null) row. The model perfectly recognizes static chord geometries but occasionally misclassifies transition frames (fingers hovering just above the strings) as the actual target chords (mostly D, Am, and G).
+
+## 5. Next Steps
+* The static frame-by-frame machine learning phase is complete.
+* Move to the **Video Inference Phase**: Develop a `predict_video.py` script that applies a **Temporal Smoothing Filter** (e.g., rolling mode/median over 5 frames) to eliminate the isolated false positives caused by chord transitions.
