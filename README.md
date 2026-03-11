@@ -139,28 +139,32 @@ Applying a static frame classifier to a fluid video introduces unique challenges
 
 ```text
 ├── data/
-│   ├── annotations/            # Raw labels and metadata
-│   ├── extracted_features/     # Extracted CSV feature files (raw and cleaned)
-│   ├── processed_frames/       # Cleaned images used for model training
-│   ├── raw_videos/             # Input videos for the inference engine
-│   └── processed_videos/       # Rendered outputs with CV overlays
+│   ├── annotations/             # Raw labels and metadata (JSON)
+│   ├── extracted_features/      # Extracted CSV feature files (raw and cleaned)
+│   ├── processed_frames/        # Cleaned images used for model training
+│   ├── raw_videos/              # Input videos for the inference engine
+│   ├── processed_videos/        # Rendered outputs with CV overlays
+│   └── visualizations/          # Generated plots for documentation and thesis
+│       ├── confusion_matrix.png         # Model performance heatmap
+│       └── feature_separation_plot.png  # Geometric signature comparison
 ├── models/
-│   ├── guitar_chord_rf_model.pkl # The trained Random Forest model
-│   └── confusion_matrix.png    # Visual evaluation of the test set
+│   └── guitar_chord_rf_model.pkl # The trained Random Forest model (cerealized)
 ├── notebooks/
-│   ├── data_exploration.ipynb  # Initial EDA, viewing class distributions
-│   └── feature_extraction.ipynb # Prototyping CV algorithms visually
+│   ├── data_exploration.ipynb   # Initial EDA, preprocessing prototypes
+│   └── feature_extraction.ipynb # Visual testing of CV algorithms
 ├── src/
-│   ├── data_preprocessing/     
-│   │   └── data_ingestion.py   # Scripts for initial data loading and frame extraction
+│   ├── data_preprocessing/      
+│   │   ├── data_ingestion.py    # Frame extraction from annotated videos
+│   │   └── data_cleaning.py     # Filtering and balancing the dataset
 │   ├── features/
-│   │   ├── feature_extraction.py # Strict CV pipeline for building the training dataset
-│   │   └── feature_extractor.py  # Resilient CV module (with caching) for video inference
+│   │   ├── feature_extraction.py # Strict CV pipeline for training data
+│   │   └── feature_extractor.py  # Resilient CV module for video inference
 │   └── models/
-│       └── train_model.py      # Grid search, cross-validation, and model saving
-├── predict_video.ipynb         # Interactive UI for running video inference
+│       └── train_model.py       # Grid search, training, and evaluation
+├── predict_video.ipynb          # Interactive UI for video inference
 ├── requirements.txt
 └── README.md
+
 ```
 
 ### File Highlights:
