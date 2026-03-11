@@ -21,7 +21,10 @@ A custom dataset was meticulously recorded and annotated specifically for this p
 
 * **Recording:** A total of 168 videos were recorded using a fixed camera angle strictly focused on the guitar neck. To introduce environmental variance and ensure model robustness, the footage features **2 different guitars**, varying lighting conditions, and diverse backgrounds. Each video was designed to isolate a single chord type, alternating between the active chord and a "non-chord" (rest/transition) state.
 * **Annotation:** To maintain a balanced and homogeneous dataset across all classes, 130 videos were selected for the final annotation phase. Ground truth labels were meticulously mapped using JSON files, logging the exact start and end timestamps of the active chords and the null/transition states ('N').
-* **Processing & Cleaning:** Based on the JSON timestamps, **1,292 raw frames** were extracted. These frames underwent a rigorous cleaning and filtering phase (removing motion blur, extreme lighting anomalies, and redundant 'N' frames), resulting in a final, refined dataset of **1,089 high-quality feature vectors** saved to the CSV for model training.
+* **Data Ingestion (Smart Frame Extraction):** The `data_ingestion.py` script parses the JSON annotations to programmatically extract frames from the videos. To maximize data quality and avoid motion blur during chord changes, it uses a targeted extraction logic:
+  * **Active Chords:** Extracts 3 distinct frames per segment (at the 25%, 50%, and 75% marks) to capture slight natural variations while ensuring fingers are fully placed on the fretboard. 
+  * **Null/Transitions ('N'):** Extracts only 1 frame exactly at the midpoint (50%) of the segment to prevent over-representing the 'N' class and maintain dataset balance.
+* **Processing & Cleaning:** This smart ingestion process yielded **1,292 raw frames**. These frames then underwent a rigorous cleaning and filtering phase (removing motion blur, extreme lighting anomalies, and redundant 'N' frames), resulting in a final, refined dataset of **1,089 high-quality feature vectors** saved to the CSV for model training.
 
 ---
 
