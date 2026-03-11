@@ -64,6 +64,20 @@ Random Forest is highly interpretable, computationally efficient, and perfectly 
 Hyperparameter tuning was conducted using **Grid Search**, optimized specifically for the **macro F1-score** rather than standard accuracy. 
 * *Rationale:* The dataset presents class imbalances (e.g., 'Em' and 'G' have significantly fewer support samples than 'Dm' or 'N'). Optimizing for accuracy would bias the model toward majority classes. The F1-score ensures a strict balance between Precision and Recall, which is crucial for identifying complex chord shapes.
 
+### Grid Search & Optimization
+Hyperparameter tuning was conducted using **Grid Search**, optimized specifically for the **macro F1-score** rather than standard accuracy. 
+* *Rationale:* The dataset presents class imbalances (e.g., 'Em' and 'G' have significantly fewer support samples than 'Dm' or 'N'). Optimizing for accuracy would bias the model toward majority classes. The F1-score ensures a strict balance between Precision and Recall, which is crucial for identifying complex chord shapes.
+
+**Winning Hyperparameters:**
+After extensive cross-validation, the optimal Random Forest configuration was defined as:
+* `n_estimators: 1000` (Ensures a highly robust forest to capture geometric nuances)
+* `max_depth: 15` (Controls tree depth to prevent overfitting on specific frames)
+* `max_features: 'log2'` 
+* `criterion: 'gini'`
+* `class_weight: 'balanced'` (Crucial for penalizing mistakes on minority classes like 'Em' and 'G')
+* `min_samples_split: 2`
+* `min_samples_leaf: 1`
+
 ### Model Performance
 The model was evaluated using GroupShuffleSplit (ensuring frames from the same video sequence do not leak into the test set) and StratifiedGroupKFold cross-validation.
 
