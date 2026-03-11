@@ -43,10 +43,11 @@ The feature extraction process avoids black-box Deep Learning in favor of explic
 ### Step B: Fret Detection (Sobel X & Buddy System)
 * A **Sobel filter (X-axis)** isolates the vertical metallic frets.
 * A custom **Buddy System** algorithm unifies fragmented vertical lines by calculating distances between segments, effectively filtering out background noise and hand reflections.
-* A geometric projector calculates the position of the nut and the first 4 frets using a constant shrink ratio, establishing a rigid bounding matrix.
+* A geometric projector calculates the position of the nut and the first 3 fret lines (creating 4 vertical boundaries in total). This establishes the rigid bounding matrix.
 
 ### Step C: Hand Isolation & Density Calculation
-* **Skin Mask:** The player's hand is isolated using a strict RGB thresholding logic. Morphological operations (OPEN and CLOSE) remove noise and fill shadows, creating a solid blob.
+* **Skin Mask:** The player's hand is isolated using a strict RGB thresholding logic. Morphological operations (OPEN and CLOSE) remove noise and fill shadows, creating a solid blob. 
+  * *(Note on MediaPipe: An initial attempt was made to use Google's MediaPipe for kinematic hand tracking. However, the fixed POV camera angle and the complex, heavily overlapping finger positions required for guitar chords caused the algorithm to fail to detect the hand in the majority of frames. Consequently, explicit RGB thresholding was adopted as a more reliable fallback).*
 * **Edge Mask:** A **Canny** edge detector finds the strong contours of the pressing fingers, masked specifically over the skin blob.
 
 ### Step D: The 38-Feature Vector
@@ -57,15 +58,27 @@ The intersection of strings and 4 fret lines creates a tracking grid of 18 funct
 
 ---
 
+### 2.1 Feature Discriminability & Data Signature
+To validate the robustness of the 38-feature vector before training, we performed a **Signature Verification Test**. By calculating the Euclidean Distance between different frames, we analyzed how the geometric patterns change across different chord classes.
+
+<p align="center">
+  <img src="data/visualizations/feature_separation_plot.png" alt="Feature Separation Plot" width="800"/>
+</p>
+
+**Key Findings (Empirical Data):**
+* **Intra-class Variation (Same chord):** Distance $\approx 1.1 - 1.3$. This represents the natural "noise" caused by micro-movements of the hand and slight lighting variations.
+* **Inter-class Variation (Different chords):** Distance $\approx 2.2 - 2.5$. The distance doubles when comparing different chords (e.g., C vs A).
+
+**Analysis:**
+The results show a clear mathematical separation between classes. While the intra-class distance is low (indicating a stable feature extractor), the inter-class distance is significantly higher, confirming that the combination of **Skin Density**, **Edge Density**, and **Center of Mass** creates a unique "geometric fingerprint" for each chord. This measurable gap reduces the complexity for the Random Forest classifier explained in the next section. 
+
+---
+
 ## 3. Machine Learning: Classification Model
 Instead of utilizing Convolutional Neural Networks (CNNs), which require massive datasets and obscure the underlying geometric rules, this project employs a **Random Forest Classifier**.
 
 ### Why Random Forest?
 Random Forest is highly interpretable, computationally efficient, and perfectly suited for structured tabular data (our 38-feature geometric vector). By relying on explicit feature engineering, the ML model acts as a pure statistical classifier rather than a feature extractor, maintaining a clear boundary between the CV logic and the prediction logic.
-
-### Grid Search & Optimization
-Hyperparameter tuning was conducted using **Grid Search**, optimized specifically for the **macro F1-score** rather than standard accuracy. 
-* *Rationale:* The dataset presents class imbalances (e.g., 'Em' and 'G' have significantly fewer support samples than 'Dm' or 'N'). Optimizing for accuracy would bias the model toward majority classes. The F1-score ensures a strict balance between Precision and Recall, which is crucial for identifying complex chord shapes.
 
 ### Grid Search & Optimization
 Hyperparameter tuning was conducted using **Grid Search**, optimized specifically for the **macro F1-score** rather than standard accuracy. 
@@ -106,7 +119,7 @@ The model was evaluated using GroupShuffleSplit (ensuring frames from the same v
 ### Confusion Matrix
 *(You can view the generated Confusion Matrix image here to analyze misclassifications between visually similar chords).*
 <p align="center">
-  <img src="models/confusion_matrix.png" alt="Confusion Matrix" width="600"/>
+  <img src="data/visualizations/confusion_matrix.png" alt="Confusion Matrix" width="600"/>
 </p>
 
 *Note: The low recall on the 'N' (Null) class in static frames was anticipated and strategically solved during the video inference stage.*
@@ -173,8 +186,9 @@ pip install -r requirements.txt
 
 **To Train the Model:**
 1. Execute `src/data_preprocessing/data_ingestion.py` (if you need to extract new frames from raw datasets).
-2. Execute `src/features/feature_extraction.py` to process the frames and generate the 38-feature CSV file. 
-3. Execute `src/models/train_model.py`. This script reads the cleaned features from `data/extracted_features/`, performs the training with optimized parameters, and saves the `.pkl` model and confusion matrix to the `models/` folder.
+2. Execute `src/features/feature_extraction.py` to process the frames and generate the 38-feature CSV file (`chord_featuresn.csv`) . 
+3. Execute `src/features/data_cleaner.py` to filter out geometric noise, extreme outliers and balance the reduntant 'N' frames. This step generates the final refined dataset (`chord_features_clean.csv`)
+4. Execute `src/models/train_model.py`. This script reads the cleaned features from `data/extracted_features/`, performs the training with optimized parameters, and saves the `.pkl` model and confusion matrix to the `models/` folder.
 
 **To Run Video Inference:**
 1. Open `predict_video.ipynb` in the root directory.
@@ -186,8 +200,9 @@ pip install -r requirements.txt
 ## Limitations & Future Work
 * **Resolution & Speed:** The pipeline is currently optimized for 4K video to ensure enough pixel density for the Canny edge detector. Consequently, processing time is high and cannot currently run in real-time.
 * **Environmental Sensitivity:** The explicit geometric approach is sensitive to lighting conditions and requires a relatively consistent POV angle.
+* **Skin Tone Bias (Algorithmic Fairness):** The current hand-isolation step relies on hardcoded RGB thresholds calibrated specifically for lighter skin tones. This explicit geometric approach lacks demographic inclusivity and would likely fail or severely underperform on darker skin tones, as the skin mask would not correctly isolate the hand.
 * **Future Improvements:** 
   * Generalize the mathematical ratios to accept low-resolution videos.
   * Implement code optimization (or C++ OpenCV porting) to achieve real-time 4K inference.
-  * Explore advanced kinematic hand tracking (e.g., MediaPipe) if trained with a dedicated dataset to replace standard RGB skin thresholding.
+  * Explore advanced kinematic hand tracking (e.g., MediaPipe) trained on diverse datasets to replace standard RGB skin thresholding, making the system robust to all skin tones and lighting conditions.
 

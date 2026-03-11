@@ -36,7 +36,7 @@ def train_guitar_model():
     project_root = os.path.abspath(os.path.join(current_dir, "..", ".."))
     data_path = os.path.join(project_root, "data", "extracted_features", "chord_features_clean.csv")
     model_save_path = os.path.join(project_root, "models", "guitar_chord_rf_model.pkl")
-    matrix_save_path = os.path.join(project_root, "models", "confusion_matrix.png")
+    matrix_save_path = os.path.join(project_root, "data", "visualizations", "confusion_matrix.png")
 
     if not os.path.exists(data_path):
         print(f"Error: Dataset not found at {data_path}")
