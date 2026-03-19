@@ -40,5 +40,6 @@ Thumbs.db
 .vscode/
 .idea/
 
-# 5. Backups
+# 5. Backups and docs
 backups/
+docs/
