@@ -53,12 +53,12 @@ def train_guitar_model():
     # 3. DEFINE MODEL (Using your Winning Parameters)
     rf_model = RandomForestClassifier(
         n_estimators=1000,
-        max_depth=15,
+        max_depth=20,
         min_samples_leaf=1,
         min_samples_split=2,
-        max_features='log2',
+        max_features='sqrt',
         criterion='gini',
-        class_weight='balanced',
+        class_weight='balanced_subsample',
         random_state=42,
         n_jobs=-1
     )

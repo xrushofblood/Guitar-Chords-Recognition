@@ -18,13 +18,10 @@ for directory in [DEBUG_DIR, VIZ_DIR]:
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-# --- PHYSICAL LIMITS & RATIOS FOR 4K ---
-NECK_EDGE_RATIO = 0.88   
-
 files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith(('.jpg', '.png', '.jpeg'))]
-print(f"Found {len(files)} frames. Running Full Pipeline (Steps 2 through 9)...")
+print(f"Found {len(files)} frames. Running 1:1 Aligned Pipeline...")
 
-# Open CSV file to save the 18-feature vectors
+# Open CSV file to save the 38-feature vectors
 with open(CSV_PATH, mode='w', newline='') as csv_file:
     csv_writer = csv.writer(csv_file)
     
@@ -34,7 +31,6 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         header.extend([f'skin_{i}', f'edge_{i}'])
     
     header.extend(['hand_center_y', 'hand_center_x'])
-    
     csv_writer.writerow(header)
     print(f"Header written to {CSV_PATH}")
 
@@ -46,20 +42,15 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         height, width = original_frame.shape[:2]
         crop_offset_x = int(width * 0.15) 
 
-        MIN_SINGLE_GAP = height * 0.015  
-        MAX_SINGLE_GAP = height * 0.085  
-
         # Assume label is the first part of the filename (e.g., "C_01.jpg" -> "C")
         label = filename.split('_')[0]
 
         # =========================================================
-        # STEP 2 & 3: STRINGS EXTRACTION (WITH CLAHE)
+        # STEP 2 & 3: STRINGS EXTRACTION (Exact match with test script)
         # =========================================================
         gray = cv2.cvtColor(original_frame, cv2.COLOR_BGR2GRAY)
-        
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray_enhanced = clahe.apply(gray)
-        
         blurred = cv2.GaussianBlur(gray_enhanced, (5, 5), 0)
 
         sobel_y = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=3)
@@ -69,7 +60,15 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         preprocessed_strings = cv2.morphologyEx(thresh_strings, cv2.MORPH_CLOSE, kernel_h, iterations=2)
 
         roi_strings = preprocessed_strings.copy()
+        
+        # Left cut (Headstock)
         cv2.rectangle(roi_strings, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
+        
+        # Top and Bottom cuts
+        top_cut = int(height * 0.15)
+        bottom_cut = int(height * 0.85)
+        cv2.rectangle(roi_strings, (0, 0), (width, top_cut), (0, 0, 0), -1)
+        cv2.rectangle(roi_strings, (0, bottom_cut), (width, height), (0, 0, 0), -1)
         
         lines_h = cv2.HoughLinesP(
             roi_strings, 1, np.pi/180, threshold=50,
@@ -85,16 +84,18 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
                 if deviation <= 10.0: 
                     clean_strings_segments.append(line)
 
-        if not clean_strings_segments: continue
+        if not clean_strings_segments:
+            print(f"   [SKIP] {filename} - No strings detected.")
+            continue
 
         # =========================================================
-        # STEP 3C: PERSPECTIVE STRING INFERENCE (ANCHOR-BASED)
+        # STEP 3C: PERSPECTIVE STRING INFERENCE
         # =========================================================
-        # 1. CLUSTERING: Group segments by their central Y coordinate (yc)
         segments_with_yc = []
         for line in clean_strings_segments:
             x1, y1, x2, y2 = line[0]
-            m = (y2 - y1) / (x2 - x1 + 1e-6)
+            if x1 == x2: x2 += 1 
+            m = (y2 - y1) / (x2 - x1)
             q = y1 - m * x1
             yc = m * (width / 2) + q
             segments_with_yc.append((yc, x1, y1, x2, y2))
@@ -113,10 +114,9 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
                     curr_group = [seg]
             groups.append(curr_group)
 
-        # 2. LINE REGRESSION: Find unique lines from groups
         detected_strings = []
         for g in groups:
-            X, Y = [], []
+            X, Y = [] , []
             for seg in g:
                 X.extend([seg[1], seg[3]])
                 Y.extend([seg[2], seg[4]])
@@ -126,63 +126,40 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         
         detected_strings.sort(key=lambda x: x['yc'])
 
-        # 3. NECK KILLER & ANCHOR IDENTIFICATION
-        # We use the gap between detected lines to filter out the wood edge (Neck)
-        if len(detected_strings) >= 3:
-            gaps = np.diff([s['yc'] for s in detected_strings])
-            valid_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
-            base_gap = np.median(valid_gaps) if valid_gaps else (np.min(gaps)/2 if len(gaps)>0 else 100)
-
-            # If the first gap is too small (Neck edge), discard the top-most line
-            if gaps[0] < base_gap * NECK_EDGE_RATIO:
-                print(f"   [INFO] Neck edge detected and removed for {filename}")
-                detected_strings.pop(0) 
-
-        # 4. LOGICAL INDEXING (Anchor: 6th String down to 1st)
         final_strings_equations = [] 
         if len(detected_strings) >= 1:
             indices = [0]
             if len(detected_strings) > 1:
                 gaps = np.diff([s['yc'] for s in detected_strings])
-                valid_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
-                base_gap = np.median(valid_gaps) if valid_gaps else 100
+                valid_gaps = [g for g in gaps if height * 0.02 < g < height * 0.15]
+                base_gap = np.median(valid_gaps) if valid_gaps else np.median(gaps)
                 
                 for i in range(1, len(detected_strings)):
                     gap = detected_strings[i]['yc'] - detected_strings[i-1]['yc']
-                    # Calculate how many string gaps are between this and the anchor
                     steps = max(1, round(gap / base_gap))
                     indices.append(indices[-1] + steps)
 
-            # Assign logical positions (0-5) based on screen position
-            top_y = detected_strings[0]['yc']
-            bottom_y = detected_strings[-1]['yc']
-            
-            # Determine if we anchor from S6 (top) or S1 (bottom)
-            if top_y > height - bottom_y:
-                shift = 5 - indices[-1]
-            else:
-                shift = 0 - indices[0]
-                
+            shift = 0 - indices[0]
             indices = [i + shift for i in indices]
             valid_data = [(idx, s) for idx, s in zip(indices, detected_strings) if 0 <= idx <= 5]
 
-            # 5. FINAL REGRESSION: Standardize the 6 master strings
             if len(valid_data) >= 2:
                 m_model = np.polyfit([v[0] for v in valid_data], [v[1]['m'] for v in valid_data], 1)
                 q_model = np.polyfit([v[0] for v in valid_data], [v[1]['q'] for v in valid_data], 1)
                 for i in range(6):
                     final_strings_equations.append((np.polyval(m_model, i), np.polyval(q_model, i)))
             else:
-                # Fallback if only 1 string is detected: infer others downward using base_gap
                 s0 = valid_data[0][1] if valid_data else detected_strings[0]
-                idx0 = valid_data[0][0] if valid_data else 0
                 base_gap = height * 0.04
+                m_model = [0, s0['m']] 
+                q_model = [base_gap, s0['q']]
                 for i in range(6):
-                    offset = (i - idx0) * base_gap
-                    final_strings_equations.append((s0['m'], s0['q'] + offset))
+                    final_strings_equations.append((np.polyval(m_model, i), np.polyval(q_model, i)))
+        
+        final_strings_equations.sort(key=lambda eq: eq[1])
 
         # =========================================================
-        # STEP 4: RAW FRET EXTRACTION (Sobel & Hough)
+        # STEP 4: RAW FRET EXTRACTION
         # =========================================================
         sobel_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
         abs_sobel = cv2.convertScaleAbs(sobel_x)
@@ -205,13 +182,9 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         string_fence_mask = np.zeros_like(preprocessed_frets)
         cv2.fillPoly(string_fence_mask, [pts], 255)
 
-        # Applying mask to focus only on the fretboard area
         roi_frets = cv2.bitwise_and(preprocessed_frets, string_fence_mask)
 
-        # --- LEFT CROP: Hide picking hand ---
         cv2.rectangle(roi_frets, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
-
-        # --- RIGHT CROP: Hide the headstock/nut ---
         headstock_cut = int(width * 0.20)
         cv2.rectangle(roi_frets, (width - headstock_cut, 0), (width, height), (0, 0, 0), -1)
 
@@ -224,18 +197,16 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
         )
 
         angle_filtered_frets = []
-        
         if lines_v is not None:
             for line in lines_v:
                 x1, y1, x2, y2 = line[0]
                 angle_deg = abs(math.degrees(math.atan2(y2 - y1, x2 - x1))) % 180
                 deviation = abs(angle_deg - 90)
-                
                 if deviation <= 10.0:
                     angle_filtered_frets.append(line)
 
         # =========================================================
-        # STEP 5: FRET UNIFICATION (The Buddy System)
+        # STEP 5: FRET UNIFICATION
         # =========================================================
         clean_unified_frets = []
         buddy_tolerance = int(width * 0.015) 
@@ -265,7 +236,7 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
                 clean_unified_frets.append({'x': avg_x, 'y1': min_y, 'y2': max_y})
 
         # =========================================================
-        # STEP 6: MANUAL GRID PROJECTOR (NUT + 4 FRETS)
+        # STEP 6: MANUAL GRID PROJECTOR
         # =========================================================
         initial_gap = width * 0.12
         shrink_ratio = 0.80
@@ -289,16 +260,11 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
             fret1_x = int(width * 0.8) 
 
         final_frets_x = []
-
-        # GENERATION OF THE NUT (TO THE RIGHT OF FRET 1)
         nut_gap = initial_gap / shrink_ratio
         nut_x = int(fret1_x + nut_gap)
         final_frets_x.append(nut_x)
-
-        # SAVING FRET 1
         final_frets_x.append(int(fret1_x))
 
-        # PROJECTION OF FRETS 2 AND 3 (TOWARDS THE LEFT)
         current_x = fret1_x
         current_gap = initial_gap
 
@@ -308,17 +274,14 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
             current_x = next_x
             current_gap *= shrink_ratio 
 
-        # Sort the array from the left to right for Step 7
         final_frets_x.sort()
 
         # =========================================================
-        # STEP 7: THE FINAL BOUNDED FRETBOARD MATRIX (6x4 GRID)
+        # STEP 7: THE FINAL BOUNDED FRETBOARD MATRIX
         # =========================================================
         grid_frets_x = final_frets_x
-        final_strings_equations.sort(key=lambda eq: eq[1]) 
 
         fretboard_matrix = []
-
         for string_idx, (m, q) in enumerate(final_strings_equations):
             string_nodes = []
             for fret_x in grid_frets_x:
@@ -327,42 +290,57 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
             fretboard_matrix.append(string_nodes)
 
         # =========================================================
-        # STEP 8: THE DOMINANT BLOB (EXTRACTING THE HAND ONLY)
+        # STEP 8: THE DOMINANT BLOB (ALIGNED WITH TEST LOGIC)
         # =========================================================
         img_rgb = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
-        R = img_rgb[:,:,0]
-        G = img_rgb[:,:,1]
-        B = img_rgb[:,:,2]
+        R = img_rgb[:,:,0].astype(np.int32)
+        G = img_rgb[:,:,1].astype(np.int32)
+        B = img_rgb[:,:,2].astype(np.int32)
 
-        skin_mask = (R > 95) & (G > 40) & (B > 20) & ((R.astype(int) - G.astype(int)) > 15) & (R > G) & (R > B)
-        skin_mask = (skin_mask.astype(np.uint8) * 255)
+        # Strict Skin Logic (Test script exactly)
+        skin_mask_global = (R > 95) & (G > 40) & (B > 20) & \
+                    ((R - G) > 35) & (R > G) & \
+                    (abs(R - B) > 15)
 
-        # FIX 1: Lowered from 0.4 to 0.3 to prevent cutting off fingers on the brown guitar
-        left_cut = int(width * 0.3) 
+        skin_mask_global = (skin_mask_global.astype(np.uint8) * 255)
+
+        # Fretboard Fence (Cutting off skin outside strings)
+        fretboard_mask = np.zeros_like(skin_mask_global)
+        if len(final_strings_equations) == 6:
+            p1 = [0, int(m_top * 0 + q_top)]
+            p2 = [width, int(m_top * width + q_top)]
+            p3 = [width, int(m_bot * width + q_bot)]
+            p4 = [0, int(m_bot * 0 + q_bot)]
+            
+            pts = np.array([p1, p2, p3, p4], np.int32)
+            cv2.fillPoly(fretboard_mask, [pts], 255)
+            
+            # Keep skin ONLY inside the strings
+            skin_mask = cv2.bitwise_and(skin_mask_global, fretboard_mask)
+        else:
+            skin_mask = skin_mask_global
+
+        # Left cut strictly at 0.35 like test script
+        left_cut = int(width * 0.35) 
         skin_mask[:, :left_cut] = 0
 
-        kernel_massive = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        
-        # OPEN: Removes background noise (thin lines, wood reflections)
-        hand_only_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel_massive)
-        
-        # FIX 2: CLOSE: Fills in holes and shadows inside the hand to make it a solid blob
-        hand_only_mask = cv2.morphologyEx(hand_only_mask, cv2.MORPH_CLOSE, kernel_massive)
+        # Morphology exactly like test script
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel_open)
 
-        # FIX 3: Reassign to skin_mask so Step 9 uses the solid, cleaned blob for CSV densities
-        skin_mask = hand_only_mask
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel_close)
 
         # =========================================================
         # STEP 9: 38-FEATURE VECTOR (SKIN + BOOSTED EDGES + COM)
         # =========================================================
-        # 1. Generate Edges and BOOST them (Dilation makes lines thicker/heavier)
         edges = cv2.Canny(blurred, 30, 100)
         kernel_edge = np.ones((3, 3), np.uint8)
         dilated_edges = cv2.dilate(edges, kernel_edge, iterations=1)
         hand_edges = cv2.bitwise_and(dilated_edges, skin_mask)
 
         chord_signature = [] 
-        all_skin_densities = [] # Used to calculate the center of mass later
+        all_skin_densities = [] 
         debug_grid = original_frame.copy()
 
         num_strings = len(fretboard_matrix)
@@ -386,7 +364,6 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
                     total_pixels = skin_crop.shape[0] * skin_crop.shape[1]
                     s_den = round(cv2.countNonZero(skin_crop) / total_pixels, 3)
                     
-                    # BOOST EDGES: We multiply by 10 to give edges a similar "weight" to skin density
                     edge_raw_density = cv2.countNonZero(edge_crop) / total_pixels
                     if edge_raw_density > 0.01:
                         e_den = 0.8  
@@ -398,37 +375,28 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
                 chord_signature.extend([s_den, e_den])
                 all_skin_densities.append(s_den)
 
-        # --- NEW: CALCULATE CENTER OF MASS ---
-        # This tells the model if the hand is high (Strings 0-2) or low (Strings 3-5)
-        # We only consider cells with significant skin presence (> 10%)
         active_cells = [i for i, val in enumerate(all_skin_densities) if val > 0.1]
         
         if active_cells:
             avg_idx = np.mean(active_cells)
-            center_y = round(avg_idx / 3.0, 2) # Average String position
-            center_x = round(avg_idx % 3.0, 2) # Average Fret position
+            center_y = round(avg_idx / 3.0, 2) 
+            center_x = round(avg_idx % 3.0, 2) 
         else:
             center_y, center_x = 0.0, 0.0
 
-        # Final 38-feature vector
         final_features = chord_signature + [center_y, center_x]
 
         # Write to CSV
         csv_writer.writerow([filename, label] + final_features)
         
         # --- VISUALIZATION UPDATE ---
-        # Draw a yellow circle at the Center of Mass to verify it's working
-        if center_y > 0:
-            # Simple mapping from grid coords to pixel coords for visualization
+        if center_y > 0 and len(grid_frets_x) >= 3 and len(final_strings_equations) == 6:
             viz_x = int(grid_frets_x[int(min(center_x, 2))])
             viz_y = int(final_strings_equations[int(min(center_y, 5))][1])
             cv2.circle(debug_grid, (viz_x, viz_y), 10, (0, 255, 255), -1)
             cv2.putText(debug_grid, "COM", (viz_x+15, viz_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
-        #cv2.imwrite(os.path.join(VIZ_DIR, f"signature_{filename}"), debug_grid)
-        
         print(f"   [OK] {filename} -> Features Extracted. Signature: {chord_signature[:3]}...")
 
 print(f"\nMasterpiece Complete! Pipeline successfully executed on all frames.")
-#print(f"- Visualizations saved in: {VIZ_DIR}")
 print(f"- Extracted Data saved to: {CSV_PATH}")

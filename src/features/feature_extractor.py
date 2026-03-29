@@ -4,13 +4,9 @@ import math
 
 def extract_features_from_frame(original_frame, grid_cache=None):
     """
-    Extracts the 38-feature vector from a single guitar frame using the exact
-    perspective geometry logic from the training phase.
-    
-    Returns:
-        final_features (list): The 38 extracted features, or None if extraction fails.
-        grid_cache (dict): The updated cache to be passed to the next frame.
-        debug_data (dict): Data for visualization (matrix, frets, equations).
+    Extracts the 38-feature vector from a single guitar frame.
+    IMPLEMENTS INTELLIGENT CACHE: Uses Exponential Moving Average (EMA) and 
+    Jump-Veto logic to prevent the grid from collapsing when fingers occlude strings.
     """
     if grid_cache is None:
         grid_cache = {}
@@ -39,6 +35,11 @@ def extract_features_from_frame(original_frame, grid_cache=None):
     roi_strings = preprocessed_strings.copy()
     cv2.rectangle(roi_strings, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
     
+    top_cut = int(height * 0.15)
+    bottom_cut = int(height * 0.85)
+    cv2.rectangle(roi_strings, (0, 0), (width, top_cut), (0, 0, 0), -1)
+    cv2.rectangle(roi_strings, (0, bottom_cut), (width, height), (0, 0, 0), -1)
+    
     lines_h = cv2.HoughLinesP(
         roi_strings, 1, np.pi/180, threshold=50,
         minLineLength=int(width * 0.25), maxLineGap=int(width * 0.05)
@@ -53,273 +54,262 @@ def extract_features_from_frame(original_frame, grid_cache=None):
             if deviation <= 10.0: 
                 clean_strings_segments.append(line)
 
-    # =========================================================
-    # CACHE RESCUE LOGIC (BYPASS)
-    # =========================================================
-    need_to_build_grid = True
-    
+    # --- CACHE FALLBACK IF NO STRINGS FOUND AT ALL ---
     if not clean_strings_segments:
-        if 'matrix' in grid_cache and grid_cache['matrix'] is not None:
-            fretboard_matrix = grid_cache['matrix']
-            grid_frets_x = grid_cache['frets']
-            final_strings_equations = grid_cache['eqs']
-            need_to_build_grid = False 
+        if 'smooth_eqs' in grid_cache and 'smooth_frets' in grid_cache:
+            final_strings_equations = grid_cache['smooth_eqs']
+            final_frets_x = grid_cache['smooth_frets']
         else:
-            # Cache is empty and we see nothing (e.g., frame 1 is completely occluded)
             return None, grid_cache, None 
+    else:
+        # =========================================================
+        # STEP 3C: PERSPECTIVE STRING INFERENCE
+        # =========================================================
+        segments_with_yc = []
+        for line in clean_strings_segments:
+            x1, y1, x2, y2 = line[0]
+            if x1 == x2: x2 += 1 
+            m = (y2 - y1) / (x2 - x1)
+            q = y1 - m * x1
+            yc = m * (width / 2) + q
+            segments_with_yc.append((yc, x1, y1, x2, y2))
 
-    # Only run mathematical extraction if we didn't rescue from cache
-    if need_to_build_grid:
-        try:
-            # =========================================================
-            # STEP 3C: PERSPECTIVE STRING INFERENCE (ANCHOR-BASED)
-            # =========================================================
-            segments_with_yc = []
-            for line in clean_strings_segments:
-                x1, y1, x2, y2 = line[0]
-                m = (y2 - y1) / (x2 - x1 + 1e-6)
-                q = y1 - m * x1
-                yc = m * (width / 2) + q
-                segments_with_yc.append((yc, x1, y1, x2, y2))
+        segments_with_yc.sort(key=lambda x: x[0])
+        
+        groups = []
+        y_tol = height * 0.02 
+        if segments_with_yc:
+            curr_group = [segments_with_yc[0]]
+            for seg in segments_with_yc[1:]:
+                if seg[0] - np.mean([s[0] for s in curr_group]) <= y_tol:
+                    curr_group.append(seg)
+                else:
+                    groups.append(curr_group)
+                    curr_group = [seg]
+            groups.append(curr_group)
 
-            segments_with_yc.sort(key=lambda x: x[0])
-            
-            groups = []
-            y_tol = height * 0.02 
-            if segments_with_yc:
-                curr_group = [segments_with_yc[0]]
-                for seg in segments_with_yc[1:]:
-                    if seg[0] - np.mean([s[0] for s in curr_group]) <= y_tol:
-                        curr_group.append(seg)
-                    else:
-                        groups.append(curr_group)
-                        curr_group = [seg]
-                groups.append(curr_group)
+        detected_strings = []
+        for g in groups:
+            X, Y = [] , []
+            for seg in g:
+                X.extend([seg[1], seg[3]])
+                Y.extend([seg[2], seg[4]])
+            m, q = np.polyfit(X, Y, 1)
+            yc = m * (width / 2) + q
+            detected_strings.append({'yc': yc, 'm': m, 'q': q})
+        
+        detected_strings.sort(key=lambda x: x['yc'])
 
-            detected_strings = []
-            for g in groups:
-                X, Y = [] , []
-                for seg in g:
-                    X.extend([seg[1], seg[3]])
-                    Y.extend([seg[2], seg[4]])
-                m, q = np.polyfit(X, Y, 1)
-                yc = m * (width / 2) + q
-                detected_strings.append({'yc': yc, 'm': m, 'q': q})
-            
-            detected_strings.sort(key=lambda x: x['yc'])
-
-            if len(detected_strings) >= 3:
+        final_strings_equations = [] 
+        if len(detected_strings) >= 1:
+            indices = [0]
+            if len(detected_strings) > 1:
                 gaps = np.diff([s['yc'] for s in detected_strings])
-                valid_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
-                base_gap = np.median(valid_gaps) if valid_gaps else (np.min(gaps)/2 if len(gaps)>0 else 100)
-
-                if gaps[0] < base_gap * NECK_EDGE_RATIO:
-                    detected_strings.pop(0) 
-
-            final_strings_equations = [] 
-            if len(detected_strings) >= 1:
-                indices = [0]
-                if len(detected_strings) > 1:
-                    gaps = np.diff([s['yc'] for s in detected_strings])
-                    valid_gaps = [g for g in gaps if MIN_SINGLE_GAP < g < MAX_SINGLE_GAP]
-                    base_gap = np.median(valid_gaps) if valid_gaps else 100
-                    
-                    for i in range(1, len(detected_strings)):
-                        gap = detected_strings[i]['yc'] - detected_strings[i-1]['yc']
-                        steps = max(1, round(gap / base_gap))
-                        indices.append(indices[-1] + steps)
-
-                top_y = detected_strings[0]['yc']
-                bottom_y = detected_strings[-1]['yc']
+                valid_gaps = [g for g in gaps if height * 0.02 < g < height * 0.15]
+                base_gap = np.median(valid_gaps) if valid_gaps else np.median(gaps)
                 
-                if top_y > height - bottom_y:
-                    shift = 5 - indices[-1]
-                else:
-                    shift = 0 - indices[0]
-                    
-                indices = [i + shift for i in indices]
-                valid_data = [(idx, s) for idx, s in zip(indices, detected_strings) if 0 <= idx <= 5]
+                for i in range(1, len(detected_strings)):
+                    gap = detected_strings[i]['yc'] - detected_strings[i-1]['yc']
+                    steps = max(1, round(gap / base_gap))
+                    indices.append(indices[-1] + steps)
 
-                if len(valid_data) >= 2:
-                    m_model = np.polyfit([v[0] for v in valid_data], [v[1]['m'] for v in valid_data], 1)
-                    q_model = np.polyfit([v[0] for v in valid_data], [v[1]['q'] for v in valid_data], 1)
-                    for i in range(6):
-                        final_strings_equations.append((np.polyval(m_model, i), np.polyval(q_model, i)))
-                else:
-                    s0 = valid_data[0][1] if valid_data else detected_strings[0]
-                    idx0 = valid_data[0][0] if valid_data else 0
-                    base_gap = height * 0.04
-                    for i in range(6):
-                        offset = (i - idx0) * base_gap
-                        final_strings_equations.append((s0['m'], s0['q'] + offset))
+            shift = 0 - indices[0]
+            indices = [i + shift for i in indices]
+            valid_data = [(idx, s) for idx, s in zip(indices, detected_strings) if 0 <= idx <= 5]
 
-            # =========================================================
-            # STEP 4: RAW FRET EXTRACTION (Sobel & Hough)
-            # =========================================================
-            sobel_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
-            abs_sobel = cv2.convertScaleAbs(sobel_x)
-            _, thresh_frets = cv2.threshold(abs_sobel, 40, 255, cv2.THRESH_BINARY)
-
-            kernel_v = np.ones((7, 1), np.uint8)
-            opened_frets = cv2.morphologyEx(thresh_frets, cv2.MORPH_OPEN, kernel_v)
-            preprocessed_frets = cv2.dilate(opened_frets, kernel_v, iterations=1)
-
-            m_top, q_top = final_strings_equations[0]
-            m_bot, q_bot = final_strings_equations[5]
-            margin = 15 
-
-            p1 = [0, int(m_top * 0 + q_top) - margin]
-            p2 = [width, int(m_top * width + q_top) - margin]
-            p3 = [width, int(m_bot * width + q_bot) + margin]
-            p4 = [0, int(m_bot * 0 + q_bot) + margin]
-
-            pts = np.array([p1, p2, p3, p4], np.int32)
-            string_fence_mask = np.zeros_like(preprocessed_frets)
-            cv2.fillPoly(string_fence_mask, [pts], 255)
-
-            roi_frets = cv2.bitwise_and(preprocessed_frets, string_fence_mask)
-
-            cv2.rectangle(roi_frets, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
-            headstock_cut = int(width * 0.20)
-            cv2.rectangle(roi_frets, (width - headstock_cut, 0), (width, height), (0, 0, 0), -1)
-
-            min_length_fret = int(height * 0.10) 
-            max_gap_fret = int(height * 0.05)
-
-            lines_v = cv2.HoughLinesP(
-                roi_frets, 1, np.pi/180, threshold=40,
-                minLineLength=min_length_fret, maxLineGap=max_gap_fret
-            )
-
-            angle_filtered_frets = []
-            if lines_v is not None:
-                for line in lines_v:
-                    x1, y1, x2, y2 = line[0]
-                    angle_deg = abs(math.degrees(math.atan2(y2 - y1, x2 - x1))) % 180
-                    deviation = abs(angle_deg - 90)
-                    if deviation <= 10.0:
-                        angle_filtered_frets.append(line)
-
-            # =========================================================
-            # STEP 5: FRET UNIFICATION (The Buddy System)
-            # =========================================================
-            clean_unified_frets = []
-            buddy_tolerance = int(width * 0.015) 
-            used_lines = set()
-
-            for i, lineA in enumerate(angle_filtered_frets):
-                if i in used_lines: continue
-                xA_center = (lineA[0][0] + lineA[0][2]) / 2.0
-                buddies = [lineA]
-                used_lines.add(i)
-                
-                for j, lineB in enumerate(angle_filtered_frets):
-                    if j in used_lines: continue
-                    xB_center = (lineB[0][0] + lineB[0][2]) / 2.0
-                    
-                    if abs(xA_center - xB_center) <= buddy_tolerance:
-                        buddies.append(lineB)
-                        used_lines.add(j)
-                        
-                avg_x = int(np.mean([(b[0][0] + b[0][2])/2.0 for b in buddies]))
-                min_y = min([min(b[0][1], b[0][3]) for b in buddies])
-                max_y = max([max(b[0][1], b[0][3]) for b in buddies])
-                
-                total_span = max_y - min_y
-                if total_span >= min_length_fret:
-                    clean_unified_frets.append({'x': avg_x, 'y1': min_y, 'y2': max_y})
-
-            # =========================================================
-            # STEP 6: MANUAL GRID PROJECTOR (NUT + 4 FRETS)
-            # =========================================================
-            initial_gap = width * 0.12
-            shrink_ratio = 0.80
-
-            raw_frets_x = sorted([f['x'] for f in clean_unified_frets if (f['y2'] - f['y1']) > height * 0.05])
-            unified_x = []
-
-            if raw_frets_x:
-                curr = [raw_frets_x[0]]
-                for x in raw_frets_x[1:]:
-                    if x - curr[-1] < (width * 0.03): 
-                        curr.append(x)
-                    else:
-                        unified_x.append(int(np.mean(curr)))
-                        curr = [x]
-                unified_x.append(int(np.mean(curr)))
-
-            if unified_x:
-                fret1_x = unified_x[-1] 
+            if len(valid_data) >= 2:
+                m_model = np.polyfit([v[0] for v in valid_data], [v[1]['m'] for v in valid_data], 1)
+                q_model = np.polyfit([v[0] for v in valid_data], [v[1]['q'] for v in valid_data], 1)
+                for i in range(6):
+                    final_strings_equations.append((np.polyval(m_model, i), np.polyval(q_model, i)))
             else:
-                fret1_x = int(width * 0.8) 
+                s0 = valid_data[0][1] if valid_data else detected_strings[0]
+                base_gap = height * 0.04
+                m_model = [0, s0['m']] 
+                q_model = [base_gap, s0['q']]
+                for i in range(6):
+                    final_strings_equations.append((np.polyval(m_model, i), np.polyval(q_model, i)))
+        
+        final_strings_equations.sort(key=lambda eq: eq[1])
 
-            final_frets_x = []
+        # =========================================================
+        # STEP 4 & 5 & 6: FRET EXTRACTION
+        # =========================================================
+        sobel_x = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
+        abs_sobel = cv2.convertScaleAbs(sobel_x)
+        _, thresh_frets = cv2.threshold(abs_sobel, 40, 255, cv2.THRESH_BINARY)
 
-            nut_gap = initial_gap / shrink_ratio
-            nut_x = int(fret1_x + nut_gap)
-            final_frets_x.append(nut_x)
-            final_frets_x.append(int(fret1_x))
+        kernel_v = np.ones((7, 1), np.uint8)
+        opened_frets = cv2.morphologyEx(thresh_frets, cv2.MORPH_OPEN, kernel_v)
+        preprocessed_frets = cv2.dilate(opened_frets, kernel_v, iterations=1)
 
-            current_x = fret1_x
-            current_gap = initial_gap
+        m_top, q_top = final_strings_equations[0]
+        m_bot, q_bot = final_strings_equations[5]
+        margin = 15 
 
-            for i in range(2, 4): 
-                next_x = int(current_x - current_gap)
-                final_frets_x.append(next_x)
-                current_x = next_x
-                current_gap *= shrink_ratio 
+        p1 = [0, int(m_top * 0 + q_top) - margin]
+        p2 = [width, int(m_top * width + q_top) - margin]
+        p3 = [width, int(m_bot * width + q_bot) + margin]
+        p4 = [0, int(m_bot * 0 + q_bot) + margin]
 
-            final_frets_x.sort()
+        pts = np.array([p1, p2, p3, p4], np.int32)
+        string_fence_mask = np.zeros_like(preprocessed_frets)
+        cv2.fillPoly(string_fence_mask, [pts], 255)
+        roi_frets = cv2.bitwise_and(preprocessed_frets, string_fence_mask)
 
-            # =========================================================
-            # STEP 7: THE FINAL BOUNDED FRETBOARD MATRIX (6x4 GRID)
-            # =========================================================
-            grid_frets_x = final_frets_x
-            final_strings_equations.sort(key=lambda eq: eq[1]) 
+        cv2.rectangle(roi_frets, (0, 0), (crop_offset_x, height), (0, 0, 0), -1)
+        headstock_cut = int(width * 0.20)
+        cv2.rectangle(roi_frets, (width - headstock_cut, 0), (width, height), (0, 0, 0), -1)
 
-            fretboard_matrix = []
-            for string_idx, (m, q) in enumerate(final_strings_equations):
-                string_nodes = []
-                for fret_x in grid_frets_x:
-                    intersect_y = int(m * fret_x + q)
-                    string_nodes.append((int(fret_x), intersect_y))
-                fretboard_matrix.append(string_nodes)
+        min_length_fret = int(height * 0.10) 
+        max_gap_fret = int(height * 0.05)
+        lines_v = cv2.HoughLinesP(roi_frets, 1, np.pi/180, threshold=40, minLineLength=min_length_fret, maxLineGap=max_gap_fret)
 
-            # SUCCESS: Save to cache
-            grid_cache['matrix'] = fretboard_matrix
-            grid_cache['frets'] = grid_frets_x
-            grid_cache['eqs'] = final_strings_equations
+        angle_filtered_frets = []
+        if lines_v is not None:
+            for line in lines_v:
+                x1, y1, x2, y2 = line[0]
+                angle_deg = abs(math.degrees(math.atan2(y2 - y1, x2 - x1))) % 180
+                if abs(angle_deg - 90) <= 10.0:
+                    angle_filtered_frets.append(line)
 
-        except Exception as e:
-            # If ANY mathematical step fails, try to fall back to cache
-            if 'matrix' in grid_cache and grid_cache['matrix'] is not None:
-                fretboard_matrix = grid_cache['matrix']
-                grid_frets_x = grid_cache['frets']
-                final_strings_equations = grid_cache['eqs']
+        clean_unified_frets = []
+        buddy_tolerance = int(width * 0.015) 
+        used_lines = set()
+        for i, lineA in enumerate(angle_filtered_frets):
+            if i in used_lines: continue
+            xA_center = (lineA[0][0] + lineA[0][2]) / 2.0
+            buddies = [lineA]
+            used_lines.add(i)
+            for j, lineB in enumerate(angle_filtered_frets):
+                if j in used_lines: continue
+                xB_center = (lineB[0][0] + lineB[0][2]) / 2.0
+                if abs(xA_center - xB_center) <= buddy_tolerance:
+                    buddies.append(lineB)
+                    used_lines.add(j)
+            avg_x = int(np.mean([(b[0][0] + b[0][2])/2.0 for b in buddies]))
+            min_y = min([min(b[0][1], b[0][3]) for b in buddies])
+            max_y = max([max(b[0][1], b[0][3]) for b in buddies])
+            if (max_y - min_y) >= min_length_fret:
+                clean_unified_frets.append({'x': avg_x, 'y1': min_y, 'y2': max_y})
+
+        initial_gap = width * 0.12
+        shrink_ratio = 0.80
+        raw_frets_x = sorted([f['x'] for f in clean_unified_frets if (f['y2'] - f['y1']) > height * 0.05])
+        unified_x = []
+        if raw_frets_x:
+            curr = [raw_frets_x[0]]
+            for x in raw_frets_x[1:]:
+                if x - curr[-1] < (width * 0.03): 
+                    curr.append(x)
+                else:
+                    unified_x.append(int(np.mean(curr)))
+                    curr = [x]
+            unified_x.append(int(np.mean(curr)))
+
+        fret1_x = unified_x[-1] if unified_x else int(width * 0.8) 
+
+        final_frets_x = []
+        nut_gap = initial_gap / shrink_ratio
+        final_frets_x.append(int(fret1_x + nut_gap))
+        final_frets_x.append(int(fret1_x))
+
+        current_x = fret1_x
+        current_gap = initial_gap
+        for i in range(2, 4): 
+            next_x = int(current_x - current_gap)
+            final_frets_x.append(next_x)
+            current_x = next_x
+            current_gap *= shrink_ratio 
+        final_frets_x.sort()
+
+        # =========================================================
+        # THE INTELLIGENT CACHE (EMA + SANITY CHECK)
+        # =========================================================
+        if 'smooth_eqs' in grid_cache and 'smooth_frets' in grid_cache:
+            cached_eqs = grid_cache['smooth_eqs']
+            cached_frets = grid_cache['smooth_frets']
+            
+            # SANITY CHECK: Calculate the jump of the top and bottom strings
+            q_top_new = final_strings_equations[0][1]
+            q_top_old = cached_eqs[0][1]
+            q_bot_new = final_strings_equations[5][1]
+            q_bot_old = cached_eqs[5][1]
+            
+            jump_top = abs(q_top_new - q_top_old)
+            jump_bot = abs(q_bot_new - q_bot_old)
+            
+            # If the grid jumps more than 3% of screen height instantly, it's an occlusion (finger)!
+            if jump_top > height * 0.03 or jump_bot > height * 0.03:
+                # REJECT new grid, use cache fully
+                final_strings_equations = cached_eqs
+                final_frets_x = cached_frets
             else:
-                return None, grid_cache, None
+                # ACCEPT new grid, but smooth it (15% new, 85% old) to prevent micro-wobbles
+                alpha = 0.15 
+                smoothed_eqs = []
+                for (m_old, q_old), (m_new, q_new) in zip(cached_eqs, final_strings_equations):
+                    smoothed_eqs.append((m_old * (1-alpha) + m_new * alpha, q_old * (1-alpha) + q_new * alpha))
+                final_strings_equations = smoothed_eqs
+                
+                if len(final_frets_x) == len(cached_frets):
+                    smoothed_frets = [int(f_old * (1-alpha) + f_new * alpha) for f_old, f_new in zip(cached_frets, final_frets_x)]
+                    final_frets_x = smoothed_frets
+
+        # Save to cache for the next frame
+        grid_cache['smooth_eqs'] = final_strings_equations
+        grid_cache['smooth_frets'] = final_frets_x
 
     # =========================================================
-    # STEP 8: THE DOMINANT BLOB (EXTRACTING THE HAND ONLY)
+    # STEP 7: BUILD MATRIX
+    # =========================================================
+    grid_frets_x = final_frets_x
+    fretboard_matrix = []
+    for string_idx, (m, q) in enumerate(final_strings_equations):
+        string_nodes = []
+        for fret_x in grid_frets_x:
+            intersect_y = int(m * fret_x + q)
+            string_nodes.append((int(fret_x), intersect_y))
+        fretboard_matrix.append(string_nodes)
+
+    # =========================================================
+    # STEP 8 & 9: THE DOMINANT BLOB & FEATURE EXTRACTION
     # =========================================================
     img_rgb = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
-    R, G, B = img_rgb[:,:,0], img_rgb[:,:,1], img_rgb[:,:,2]
+    R = img_rgb[:,:,0].astype(np.int32)
+    G = img_rgb[:,:,1].astype(np.int32)
+    B = img_rgb[:,:,2].astype(np.int32)
 
-    skin_mask = (R > 95) & (G > 40) & (B > 20) & ((R.astype(int) - G.astype(int)) > 15) & (R > G) & (R > B)
-    skin_mask = (skin_mask.astype(np.uint8) * 255)
+    skin_mask_global = (R > 95) & (G > 40) & (B > 20) & \
+                ((R - G) > 35) & (R > G) & \
+                (abs(R - B) > 15)
 
-    left_cut = int(width * 0.3) 
+    skin_mask_global = (skin_mask_global.astype(np.uint8) * 255)
+
+    fretboard_mask = np.zeros_like(skin_mask_global)
+    if len(final_strings_equations) == 6:
+        m_top, q_top = final_strings_equations[0]
+        m_bot, q_bot = final_strings_equations[5]
+        
+        p1 = [0, int(m_top * 0 + q_top)]
+        p2 = [width, int(m_top * width + q_top)]
+        p3 = [width, int(m_bot * width + q_bot)]
+        p4 = [0, int(m_bot * 0 + q_bot)]
+        
+        pts = np.array([p1, p2, p3, p4], np.int32)
+        cv2.fillPoly(fretboard_mask, [pts], 255)
+        skin_mask = cv2.bitwise_and(skin_mask_global, fretboard_mask)
+    else:
+        skin_mask = skin_mask_global
+
+    left_cut = int(width * 0.35) 
     skin_mask[:, :left_cut] = 0
 
-    kernel_massive = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-    
-    hand_only_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel_massive)
-    hand_only_mask = cv2.morphologyEx(hand_only_mask, cv2.MORPH_CLOSE, kernel_massive)
-    skin_mask = hand_only_mask
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_OPEN, kernel_open)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    skin_mask = cv2.morphologyEx(skin_mask, cv2.MORPH_CLOSE, kernel_close)
 
-    # =========================================================
-    # STEP 9: 38-FEATURE VECTOR (SKIN + BOOSTED EDGES + COM)
-    # =========================================================
     edges = cv2.Canny(blurred, 30, 100)
     kernel_edge = np.ones((3, 3), np.uint8)
     dilated_edges = cv2.dilate(edges, kernel_edge, iterations=1)
@@ -371,13 +361,13 @@ def extract_features_from_frame(original_frame, grid_cache=None):
 
     final_features = chord_signature + [center_y, center_x]
     
-    # Pack debug data for drawing in the notebook
     debug_data = {
         'matrix': fretboard_matrix,
         'frets': grid_frets_x,
         'eqs': final_strings_equations,
         'com_y': center_y,
-        'com_x': center_x
+        'com_x': center_x,
+        'skin_mask': skin_mask
     }
 
     return final_features, grid_cache, debug_data
