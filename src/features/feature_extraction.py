@@ -398,5 +398,5 @@ with open(CSV_PATH, mode='w', newline='') as csv_file:
 
         print(f"   [OK] {filename} -> Features Extracted. Signature: {chord_signature[:3]}...")
 
-print(f"\nMasterpiece Complete! Pipeline successfully executed on all frames.")
+print(f"\nFeature extraction complete! Pipeline successfully executed on all frames.")
 print(f"- Extracted Data saved to: {CSV_PATH}")
