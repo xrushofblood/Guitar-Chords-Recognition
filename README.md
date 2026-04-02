@@ -430,7 +430,7 @@ While a standard 15% margin is required to switch between distinct chords, the t
   - StratifiedGroupKFold
 
 - `predict_video.ipynb`  
-  Interactive inference notebooke:
+  Interactive inference notebook:
   - loads trained model and `feature_extractor` module
   - frame-skipping engine for up to 3x faster processing
   - inertia-based temporal logic (Activation, Drop, and Margin thresholds)
