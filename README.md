@@ -349,6 +349,11 @@ Instead of relying on a standard rolling window buffer (`deque`), the temporal l
 
 This "battle of probabilities" ensures that micro-variations in hand posture do not cause erratic chord switching.
 
+### Visual Similarity Handling (Micro-Margins)
+
+To resolve ambiguity between visually similar chords (e.g., `E` vs `Em` and `D` vs `Dm`), the system implements a "Micro-Margin" logic. 
+While a standard 15% margin is required to switch between distinct chords, the threshold is automatically lowered to 5% when the challenger belongs to a predefined list of "twin chords." This allows the model to remain responsive to subtle finger movements (where only a single finger shifts) while maintaining high stability for the rest of the vocabulary.
+
 ---
 
 ## Repository Structure
