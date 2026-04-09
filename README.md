@@ -366,14 +366,11 @@ While a standard 15% margin is required to switch between distinct chords, the t
 │   └── visualizations/           # Generated plots for documentation and analysis
 │       ├── confusion_matrix_v4.png
 │       └── feature_separation_plot.png
-
 ├── models/
 │   └── guitar_chord_rf_model.pkl # Trained Random Forest model
-
 ├── notebooks/
 │   ├── 01_data_exploration.ipynb
 │   └── 02_feature_extraction.ipynb
-
 ├── src/
 │   ├── data_preprocessing/
 │   │   └── data_ingestion.py     # Frame extraction from annotated videos
@@ -388,7 +385,6 @@ While a standard 15% margin is required to switch between distinct chords, the t
 │   └── models/
 │       ├── grid_search.py        # Hyperparameter tuning
 │       └── train_model.py        # Training, validation, evaluation
-
 ├── predict_video.ipynb           # Video inference notebook
 ├── requirements.txt
 └── README.md
