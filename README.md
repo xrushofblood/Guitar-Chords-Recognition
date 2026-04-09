@@ -358,6 +358,7 @@ While a standard 15% margin is required to switch between distinct chords, the t
 
 ## Repository Structure
 
+<pre>
 ├── data/
 │   ├── annotations/              # Raw labels and metadata (JSON)
 │   ├── extracted_features/       # Extracted CSV feature files (raw and cleaned)
@@ -388,6 +389,7 @@ While a standard 15% margin is required to switch between distinct chords, the t
 ├── predict_video.ipynb           # Video inference notebook
 ├── requirements.txt
 └── README.md
+</pre>
 
 ## File Highlights
 
