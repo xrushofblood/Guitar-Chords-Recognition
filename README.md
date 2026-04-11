@@ -1,5 +1,93 @@
 # Guitar Chord Recognition
 
+## Installation & Requirements
+
+1. Clone the repository  
+2. Ensure Python 3.10 is installed  
+3. Install dependencies:
+
+pip install -r requirements.txt
+
+### Key Dependencies
+
+- opencv-python
+- numpy
+- scikit-learn
+- pandas
+- matplotlib
+- seaborn
+- ipywidgets
+
+---
+
+## How to Use
+
+### Train the Model
+
+1. Run:
+
+   src/data_preprocessing/data_ingestion.py
+
+   Extracts frames from annotated raw videos.
+
+2. Run:
+
+   src/features/feature_extraction.py
+
+   Generates raw 38-feature dataset (`chord_features.csv`).
+
+3. Run:
+
+   src/features/data_cleaner.py
+
+   Applies null balancing and produces cleaned dataset (`chord_features_clean.csv`).
+
+4. Run:
+
+   src/models/train_model.py
+
+   - performs train/test split
+   - runs cross-validation
+   - prints classification report
+   - saves confusion matrix
+   - exports final .pkl model
+
+---
+
+### Run Grid Search
+
+1. Run:
+
+   src/models/grid_search.py
+
+2. This evaluates Random Forest configurations using:
+   - grouped cross-validation
+   - macro F1 scoring
+
+---
+
+### Run Video Inference
+
+1. Open:
+
+   predict_video.ipynb
+
+2. Run the UI cell to select a local .mp4 file
+
+3. Execute inference cells:
+   - loads trained model
+   - imports feature_extractor
+   - processes frames
+   - outputs annotated video
+
+Displayed overlays include:
+- detected strings
+- fret grid
+- COM proxy
+- predicted chord
+
+---
+
 ## Overview
 This project presents a robust pipeline designed to recognize guitar chords from pre-recorded videos using a fixed-angle camera focused on the guitar neck. The core challenge and primary focus of this project is the application of traditional Computer Vision (CV) techniques to extract pure geometric and morphological features from the fretboard, relying on Machine Learning (ML) strictly for the final multi-class classification.
 
@@ -434,94 +522,6 @@ While a standard 15% margin is required to switch between distinct chords, the t
   - inertia-based temporal logic (Activation, Drop, and Margin thresholds)
   - overlay of detected chords with real-time probability debugging
   - saves annotated output video
-
----
-
-## Installation & Requirements
-
-1. Clone the repository  
-2. Ensure Python 3.10 is installed  
-3. Install dependencies:
-
-pip install -r requirements.txt
-
-### Key Dependencies
-
-- opencv-python
-- numpy
-- scikit-learn
-- pandas
-- matplotlib
-- seaborn
-- ipywidgets
-
----
-
-## How to Use
-
-### Train the Model
-
-1. Run:
-
-   src/data_preprocessing/data_ingestion.py
-
-   Extracts frames from annotated raw videos.
-
-2. Run:
-
-   src/features/feature_extraction.py
-
-   Generates raw 38-feature dataset (`chord_features.csv`).
-
-3. Run:
-
-   src/features/data_cleaner.py
-
-   Applies null balancing and produces cleaned dataset (`chord_features_clean.csv`).
-
-4. Run:
-
-   src/models/train_model.py
-
-   - performs train/test split
-   - runs cross-validation
-   - prints classification report
-   - saves confusion matrix
-   - exports final .pkl model
-
----
-
-### Run Grid Search
-
-1. Run:
-
-   src/models/grid_search.py
-
-2. This evaluates Random Forest configurations using:
-   - grouped cross-validation
-   - macro F1 scoring
-
----
-
-### Run Video Inference
-
-1. Open:
-
-   predict_video.ipynb
-
-2. Run the UI cell to select a local .mp4 file
-
-3. Execute inference cells:
-   - loads trained model
-   - imports feature_extractor
-   - processes frames
-   - outputs annotated video
-
-Displayed overlays include:
-- detected strings
-- fret grid
-- COM proxy
-- predicted chord
 
 ---
 
